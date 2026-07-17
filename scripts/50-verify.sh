@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# No `-e`: verify_all's own nonzero return (aggregated failures) must not abort
+# the script before the manual-checklist printout, and every _check must run.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -27,6 +29,7 @@ verify_all() {
   _check "domain ${VM_NAME} running"      bash -c "virsh domstate '${VM_NAME}' | grep -q '^running$'"
   _check "domain has TPM 2.0"             bash -c "virsh dumpxml '${VM_NAME}' | grep -q \"version='2.0'\""
   _check "domain has secure boot"         bash -c "virsh dumpxml '${VM_NAME}' | grep -q \"secure='yes'\""
+  _check "SPICE console bound to loopback" bash -c "virsh dumpxml '${VM_NAME}' | grep -Eq \"listen[^>]*127.0.0.1\""
   _check "cowork-sni.service active"      systemctl is-active cowork-sni.service
   _check "DNS_LOG dir writable"           bash -c "if [ -e '${DNS_LOG}' ]; then [ -w '${DNS_LOG}' ]; else [ -w \"\$(dirname '${DNS_LOG}')\" ]; fi"
   _check "SNI_LOG dir writable"           bash -c "if [ -e '${SNI_LOG}' ]; then [ -w '${SNI_LOG}' ]; else [ -w \"\$(dirname '${SNI_LOG}')\" ]; fi"

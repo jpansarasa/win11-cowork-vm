@@ -5,7 +5,7 @@ case "$1" in
   dominfo)    [ "${VIRSH_DOM_EXISTS:-0}" = "1" ] && exit 0 || exit 1 ;;
   domstate)   echo "${VIRSH_DOMSTATE:-running}" ;;
   net-dumpxml)  echo "<network><name>$2</name></network>" ;;
-  dumpxml)      echo "<domain><name>$2</name><tpm model='tpm-crb'><backend version='2.0'/></tpm><loader secure='yes'/></domain>" ;;
+  dumpxml)      echo "<domain><name>$2</name><tpm model='tpm-crb'><backend version='2.0'/></tpm><loader secure='yes'/><graphics type='spice'><listen type='address' address='127.0.0.1'/></graphics></domain>" ;;
   *) : ;;
 esac
 exit 0

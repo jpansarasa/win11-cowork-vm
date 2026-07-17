@@ -9,6 +9,8 @@ export_definitions() {
   local dest="${1:-$ZFS_EXPORT_DIR}"
   need_cmd virsh
   mkdir -p "$dest"
+  # Net XML is exported for reference/audit only — recover.sh rebuilds the
+  # network from config.env via 10-network.sh, not from this file.
   virsh net-dumpxml "${NET_NAME}" > "${dest}/${NET_NAME}.net.xml"
   virsh dumpxml "${VM_NAME}"      > "${dest}/${VM_NAME}.domain.xml"
   log "exported net + domain XML to ${dest}"

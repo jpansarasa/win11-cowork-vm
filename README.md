@@ -71,6 +71,11 @@ sudo ./recover.sh     # after a server death: rebuild host scaffolding, re-impor
 Recovery assumes ZFS has already restored the qcow2 to `DISK_PATH` and the
 exported XML to `ZFS_EXPORT_DIR`. Dev: `make lint` (shellcheck), `make test` (bats).
 
+**Shipped egress posture:** the firewall hard-enforces a fixed DNS + 80/443
+allowlist from first boot — there is no permissive observation window. The
+always-on DNS/SNI logging is for ongoing visibility (auditing what the guest
+reaches), not for deriving the allowlist.
+
 **Reaching the console from a workstation** (no new services or firewall rules —
 it reuses the SSH access you already have to the host; SPICE tunnels inside it):
 
@@ -80,9 +85,10 @@ virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork
 
 **Console client (security):** run distro-packaged `virt-viewer` on a Linux
 machine (current, CVE-patched spice-gtk/GTK/GStreamer). Avoid the Windows MSI
-(11.0, 2021) — its bundled parsing stack is frozen and carries years of
-unpatched memory-safety CVEs. SPICE stays bound to the host's loopback and is
-reached only through the SSH tunnel.
+(as of 2026-07, still 11.0/2021 — re-check before trusting) — its bundled
+parsing stack is frozen and carries years of unpatched memory-safety CVEs.
+SPICE stays bound to the host's loopback and is reached only through the SSH
+tunnel.
 
 The guest lives on a host-internal NAT network; it is never visible on the LAN.
 
