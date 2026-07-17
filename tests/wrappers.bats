@@ -124,3 +124,41 @@ setup() {
      source recover.sh; recover_check_disk'
   [ "$status" -eq 0 ]
 }
+
+@test "recover_import defines only the domain, not the network" {
+  dest="$BATS_TMPDIR/state"; mkdir -p "$dest"
+  : > "$dest/win11-cowork.domain.xml"
+  MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source recover.sh;
+     ZFS_EXPORT_DIR="'"$dest"'"; recover_import'
+  [ "$status" -eq 0 ]
+  grep -q "virsh define" "$MOCKLOG"
+  ! grep -q "net-define" "$MOCKLOG"
+}
+
+@test "recover_import dies when exported domain XML is missing" {
+  dest="$BATS_TMPDIR/empty"; mkdir -p "$dest"
+  run bash -c \
+    'source lib/common.sh; load_config; source recover.sh;
+     ZFS_EXPORT_DIR="'"$dest"'"; recover_import'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no exported domain XML"* ]]
+}
+
+@test "export then recover_import round-trips through the same dir" {
+  dest="$BATS_TMPDIR/rt"; mkdir -p "$dest"
+  MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh;
+     export_definitions "'"$dest"'";
+     source recover.sh; ZFS_EXPORT_DIR="'"$dest"'"; recover_import'
+  [ "$status" -eq 0 ]
+}
+
+@test "snapshot_vm creates an atomic disk-only snapshot" {
+  MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
+  [ "$status" -eq 0 ]
+  grep -q "snapshot-create-as ${VM_NAME} clean-authed" "$MOCKLOG"
+  grep -q -- "--disk-only" "$MOCKLOG"
+  grep -q -- "--atomic" "$MOCKLOG"
+}

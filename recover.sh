@@ -4,10 +4,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "${HERE}/lib/common.sh"
 # load_config unconditionally re-sources config.env, which would clobber any
-# caller-supplied DISK_PATH override (e.g. from tests). Preserve it.
+# caller-supplied DISK_PATH / ZFS_EXPORT_DIR override (e.g. from tests). Preserve them.
 _pre_disk_path="${DISK_PATH:-}"
+_pre_zfs_export_dir="${ZFS_EXPORT_DIR:-}"
 load_config
 [ -n "$_pre_disk_path" ] && DISK_PATH="$_pre_disk_path"
+[ -n "$_pre_zfs_export_dir" ] && ZFS_EXPORT_DIR="$_pre_zfs_export_dir"
 
 recover_check_disk() {
   [ -f "${DISK_PATH}" ] || die "restored disk not found at ${DISK_PATH} — restore it from ZFS before recovering"
