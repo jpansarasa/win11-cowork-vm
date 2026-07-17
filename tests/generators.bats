@@ -93,7 +93,21 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"backend.version=2.0"* ]]
   [[ "$output" == *"loader.secure=yes"* ]]
   [[ "$output" == *"bus=virtio"* ]]
-  [[ "$output" == *"--graphics spice"* ]]
+  [[ "$output" == *"--graphics"* ]]
+  [[ "$output" == *"spice"* ]]
   [[ "$output" == *"${WIN_ISO}"* ]]
   [[ "$output" == *"${VIRTIO_ISO}"* ]]
+}
+
+@test "virt_install_args emits one token per line (flag and value never share an element)" {
+  mkdir -p "$BATS_TMPDIR/ovmf"
+  touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
+  local a
+  OVMF_DIR="$BATS_TMPDIR/ovmf"
+  mapfile -t a < <(virt_install_args)
+  printf '%s\n' "${a[@]}" | grep -qx -- '--memory'
+  printf '%s\n' "${a[@]}" | grep -qx -- '--graphics'
+  printf '%s\n' "${a[@]}" | grep -qx -- "${RAM_MB}"
+  # No element may contain a space (each would otherwise be rejected by virt-install).
+  for x in "${a[@]}"; do [[ "$x" != *" "* ]]; done
 }

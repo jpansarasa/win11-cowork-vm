@@ -13,7 +13,12 @@ create_vm() {
     return 0
   fi
   need_cmd virt-install
-  local args; mapfile -t args < <(virt_install_args)
+  # Command substitution (not process substitution) so a die() inside
+  # virt_install_args propagates its nonzero status here instead of being swallowed.
+  local raw
+  raw="$(virt_install_args)" || die "cannot assemble virt-install arguments (OVMF firmware missing? install the 'ovmf' package)"
+  local args; mapfile -t args <<< "$raw"
+  [ "${#args[@]}" -gt 0 ] || die "virt_install_args produced no arguments"
   virt-install "${args[@]}"
 }
 
