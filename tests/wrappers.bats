@@ -93,3 +93,11 @@ setup() {
     source scripts/50-verify.sh; verify_all'
   [ "$status" -ne 0 ]
 }
+
+@test "export_definitions writes both XML files to dest" {
+  dest="$BATS_TMPDIR/state"
+  run bash -c 'source lib/common.sh; load_config; source scripts/90-snapshot.sh; export_definitions "'"$dest"'"'
+  [ "$status" -eq 0 ]
+  [ -s "$dest/${NET_NAME}.net.xml" ] || [ -s "$dest/cowork-net.net.xml" ]
+  [ -s "$dest/${VM_NAME}.domain.xml" ] || [ -s "$dest/win11-cowork.domain.xml" ]
+}
