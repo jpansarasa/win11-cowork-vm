@@ -13,12 +13,16 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   done
 }
 
-@test "gen_nft_rules accepts gateway BEFORE the LAN drop" {
-  gen_nft_rules > "$BATS_TMPDIR/rules.nft"
-  local gw drop
-  gw=$(grep -n "ip daddr ${GATEWAY} accept" "$BATS_TMPDIR/rules.nft" | head -1 | cut -d: -f1)
-  drop=$(grep -n 'ip daddr {' "$BATS_TMPDIR/rules.nft" | head -1 | cut -d: -f1)
-  [ -n "$gw" ] && [ -n "$drop" ] && [ "$gw" -lt "$drop" ]
+@test "gen_nft_rules LAN-drop is scoped to the guest bridge on one line" {
+  run gen_nft_rules
+  [[ "$output" == *'iifname "'"${BRIDGE}"'" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } counter drop'* ]]
+}
+
+@test "gen_nft_rules: DNS/web accepts precede the final catch-all drop" {
+  gen_nft_rules > "$BATS_TMPDIR/r.nft"
+  web=$(grep -n 'tcp dport { 80, 443 }' "$BATS_TMPDIR/r.nft" | cut -d: -f1)
+  catchall=$(grep -n "iifname \"${BRIDGE}\" counter drop" "$BATS_TMPDIR/r.nft" | tail -1 | cut -d: -f1)
+  [ "$web" -lt "$catchall" ]
 }
 
 @test "gen_nft_rules allows DNS and web, drops the rest" {

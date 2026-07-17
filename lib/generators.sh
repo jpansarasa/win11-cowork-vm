@@ -11,13 +11,10 @@ table inet cowork {
 
     ct state established,related accept
 
-    # Resolver must stay reachable (gateway address falls inside the private range below) — keep ABOVE the LAN drop
-    ip daddr ${GATEWAY} accept
-
-    # HARD BLOCK: guest -> private LAN (no lateral movement)
+    # HARD BLOCK: guest -> private LAN (no lateral movement). Guest->resolver DNS is destined for the host's own bridge IP and is handled by the INPUT hook (libvirt's own rules), not this forward chain.
     iifname "${BRIDGE}" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } counter drop
 
-    # Allow DNS to the libvirt resolver and outbound web
+    # Allow forwarded DNS + web egress from the guest bridge
     iifname "${BRIDGE}" udp dport 53 accept
     iifname "${BRIDGE}" tcp dport 53 accept
     iifname "${BRIDGE}" tcp dport { 80, 443 } accept
