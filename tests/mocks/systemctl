@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+echo "systemctl $*" >> "${MOCKLOG:-/dev/null}"
+# is-active returns based on $SYSTEMCTL_ACTIVE (default active)
+# shellcheck disable=SC2015 # inner branches are exit-terminated; A&&B||C is safe here
+[ "$1" = "is-active" ] && { [ "${SYSTEMCTL_ACTIVE:-1}" = "1" ] && { echo active; exit 0; } || { echo inactive; exit 3; }; }
+exit 0

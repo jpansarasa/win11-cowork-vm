@@ -4,7 +4,7 @@ case "$1" in
   net-info)   [ "${VIRSH_NET_EXISTS:-0}" = "1" ] && exit 0 || exit 1 ;;
   dominfo)    [ "${VIRSH_DOM_EXISTS:-0}" = "1" ] && exit 0 || exit 1 ;;
   net-dumpxml)  echo "<network><name>$2</name></network>" ;;
-  dumpxml)      echo "<domain><name>$2</name></domain>" ;;
+  dumpxml)      echo "<domain><name>$2</name><tpm model='tpm-crb'><backend version='2.0'/></tpm><loader secure='yes'/></domain>" ;;
   *) : ;;
 esac
 exit 0
