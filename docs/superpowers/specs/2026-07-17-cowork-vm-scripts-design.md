@@ -36,12 +36,12 @@ lib/common.sh           # log/warn/die, require_root, need_cmd, confirm, distro 
 scripts/00-preflight.sh # assert vmx/svm + /dev/kvm; apt-install the stack; virt-host-validate
 scripts/10-network.sh   # define+start cowork-net WITH dnsmasq query-logging baked in
 scripts/20-firewall.sh  # write /etc/nftables.d/cowork.nft, load it, persist across reboot
-scripts/30-observe.sh   # on-demand TLS-SNI capture (tshark) — a helper you run, not a service
+scripts/30-observe.sh   # PERSISTENT TLS-SNI capture service (tshark) + logrotate for both logs
 scripts/40-create-vm.sh # virt-install: UEFI + Secure Boot + TPM 2.0; FIRST BUILD ONLY
 scripts/50-verify.sh    # host-side read-only assertions; nonzero exit on any failure
 scripts/90-snapshot.sh  # virsh disk snapshot + export domain/net XML to the ZFS path
-install.sh              # ordered calls for a fresh build (00→10→20→40→50)
-recover.sh              # ordered calls for rebuild-from-ZFS (00→10→20→re-import XML→50)
+install.sh              # ordered calls for a fresh build (00→10→20→30→40→50)
+recover.sh              # ordered calls for rebuild-from-ZFS (00→10→20→30→re-import XML→50)
 ```
 
 Each stage maps 1:1 to a buildspec section so the doc and the code stay legible together.
@@ -75,7 +75,8 @@ DISK_PATH=${IMAGE_DIR}/win11-cowork.qcow2
 WIN_ISO=${IMAGE_DIR}/Win11.iso
 VIRTIO_ISO=${IMAGE_DIR}/virtio-win.iso
 DNS_LOG=/var/log/libvirt/cowork-dns.log
-SNI_LOG=/var/log/libvirt/cowork-sni.txt
+SNI_LOG=/var/log/libvirt/cowork-sni.log
+LOG_RETAIN_DAYS=14                                    # rolling window for both logs (7–14 range)
 ZFS_EXPORT_DIR=/var/lib/libvirt/images/cowork-state   # 90 drops XML here; ZFS sweeps it with the qcow2
 ```
 
@@ -83,11 +84,11 @@ ZFS_EXPORT_DIR=/var/lib/libvirt/images/cowork-state   # 90 drops XML here; ZFS s
 
 ### 00-preflight.sh
 - Assert `egrep -c '(vmx|svm)' /proc/cpuinfo` > 0 and `/dev/kvm` present; **die** if not (never half-build).
-- `apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst virt-viewer ovmf swtpm swtpm-tools nftables` (+ `tshark` for `30`, prompted/optional).
+- `apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst virt-viewer ovmf swtpm swtpm-tools nftables tshark` — `tshark` is now **required** (the `30` SNI service depends on it). Install non-interactively (`wireshark-common`'s dumpcap prompt preseeded).
 - `systemctl enable --now libvirtd`; run `virt-host-validate` and surface failures.
 
 ### 10-network.sh
-- Generate the `cowork-net` XML **including** the dnsmasq namespace options (`log-queries`, `log-facility=${DNS_LOG}`) from the start, so DNS observability is on from first boot.
+- Generate the `cowork-net` XML **including** the dnsmasq namespace options (`log-queries`, `log-facility=${DNS_LOG}`) from the start, so DNS observability is on from first boot. This log is already continuous (dnsmasq is a running service), so it captures unattended Cowork runs by default — rotation for it is set up in `30`.
 - `virsh net-define / net-start / net-autostart`, guarded by existence checks. On change, `net-destroy && net-start` to apply (documented: brief guest network blip).
 
 ### 20-firewall.sh (two encoded gotchas)
@@ -96,8 +97,13 @@ ZFS_EXPORT_DIR=/var/lib/libvirt/images/cowork-state   # 90 drops XML here; ZFS s
 - Rule order: established/related accept → gateway accept → **drop guest→{10/8,172.16/12,192.168/16,169.254/16}** → accept DNS 53 udp/tcp → accept tcp 80/443 → drop everything else from the bridge.
 - **Persist across reboot:** ensure `/etc/nftables.conf` contains `include "/etc/nftables.d/cowork.nft"` and `systemctl enable nftables`. Rules match `iifname "virbr-cowork"` by name, so they load cleanly even before libvirt brings the bridge up.
 
-### 30-observe.sh
-- On-demand helper (not a service): runs `tshark -i ${BRIDGE} -f 'tcp port 443' -Y 'tls.handshake.type==1' -T fields -e tls.handshake.extensions_server_name`, de-dupes to `${SNI_LOG}`. Catches destinations that resolve via hardcoded IP/DoH and never hit dnsmasq. You run it for a while when you want to see egress; Ctrl-C to stop.
+### 30-observe.sh (persistent capture — revised per PR #1 review)
+**Why persistent, not on-demand:** the highest-value traffic to see is exactly what Cowork reaches out to while James *isn't* watching (unattended/scheduled runs). An on-demand helper misses that window entirely. Disk is a non-issue (~11 TB free); infinite growth is the only real concern, so the fix is continuous capture with a rolling retention window.
+
+- **Installs a systemd service `cowork-sni.service`** that runs tshark continuously on `${BRIDGE}`: `tshark -i ${BRIDGE} -l -f 'tcp port 443' -Y 'tls.handshake.type==1' -T fields -e frame.time_epoch -e tls.handshake.extensions_server_name` (line-buffered `-l`), appending a `timestamp<TAB>sni` line per handshake to `${SNI_LOG}` — the timestamp is what makes an unattended reach-out visible after the fact. Catches destinations that resolve via hardcoded IP/DoH and never touch dnsmasq. `Restart=always` (so it comes up on its own once `virbr-cowork` exists, and survives crashes/reboots); `WantedBy=multi-user.target`; enabled at install.
+- **Installs a logrotate config** (`/etc/logrotate.d/cowork`) covering **both** `${SNI_LOG}` and `${DNS_LOG}`: `daily`, `rotate ${LOG_RETAIN_DAYS}`, `compress`, `missingok`, `notifempty`, and `copytruncate` (both writers — tshark and dnsmasq — hold the file handle and don't reopen on rotate, so copytruncate rotates without restarting them or losing lines). Net effect: a rolling ~14-day window, no unbounded growth.
+- Reviewing egress is then just `cat`/`grep` over `${SNI_LOG}*` and `${DNS_LOG}*` — the data is always being collected, whether or not anyone is at the console.
+- **Note:** SNI is deliberately *not* de-duplicated on disk anymore — keeping timestamps/repeats is what lets you see *when* an unattended run reached out. De-dupe at read time (`sort -u`) when you want the domain set.
 
 ### 40-create-vm.sh (first build only)
 - Detect the Ubuntu OVMF secure-boot firmware path at runtime (`OVMF_CODE_4M.secboot.fd` vs `OVMF_CODE.secboot.fd`, etc.) rather than hardcoding.
@@ -109,7 +115,7 @@ Read-only assertions, nonzero exit listing failures:
 - `cowork-net` defined + active + autostart.
 - nft `cowork` table loaded; LAN-drop rule present (and ideally its counter exists).
 - domain `${VM_NAME}` defined; its XML contains TPM 2.0, Secure Boot / `smm`, and UEFI loader.
-- `${DNS_LOG}` path writable.
+- `cowork-sni.service` is enabled and active; `${DNS_LOG}` and `${SNI_LOG}` paths writable; `/etc/logrotate.d/cowork` present.
 - **Documented manual guest-side checklist** (cannot run from host): from Windows, a known LAN host is unreachable (`Test-NetConnection`), the internet works, `Get-Tpm` / `Confirm-SecureBootUEFI` both good, Cowork launches in the console session after reboot, a test scheduled run produces drafts/reports only.
 
 ### 90-snapshot.sh
@@ -122,10 +128,11 @@ Read-only assertions, nonzero exit listing failures:
 
 1. `00-preflight.sh` — reinstall host packages, enable libvirtd.
 2. `10-network.sh` + `20-firewall.sh` — rebuild network and firewall.
-3. Re-import definitions: `virsh net-define` the saved net XML (fallback: regenerate via `10` if the export is missing), `virsh define` the saved domain XML.
-4. Confirm `${DISK_PATH}` exists (the restored disk); **abort with a clear message if not** — recovery cannot proceed without it.
-5. `virsh start ${VM_NAME}`.
-6. `50-verify.sh`.
+3. `30-observe.sh` — reinstall the SNI capture service + logrotate (the standing egress-visibility posture must come back with the host).
+4. Re-import definitions: `virsh net-define` the saved net XML (fallback: regenerate via `10` if the export is missing), `virsh define` the saved domain XML.
+5. Confirm `${DISK_PATH}` exists (the restored disk); **abort with a clear message if not** — recovery cannot proceed without it.
+6. `virsh start ${VM_NAME}`.
+7. `50-verify.sh`.
 
 No Windows reinstall, no re-auth — that state rode in on the disk image.
 
