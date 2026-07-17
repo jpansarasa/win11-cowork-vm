@@ -4,37 +4,57 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-This is **not a software project** — it has no build, lint, or test tooling. It is a single ops runbook, `win11-cowork-vm-buildspec.md`, describing how to stand up an isolated Windows 11 guest on a Linux libvirt/KVM host to run Claude Cowork under revocable, MFA-gated sessions. Work here means executing the buildspec on the host, or revising the buildspec itself.
+Two things that fit together:
+1. **`win11-cowork-vm-buildspec.md`** — the human-facing runbook: how to stand up an isolated Windows 11 guest on a Linux libvirt/KVM host to run Claude Cowork under revocable, MFA-gated sessions.
+2. **Bash "script collateral"** that automates the **Linux-host side** of that runbook so a rebuild is a rollback, not a re-derivation. This is now a real software project with `make lint` / `make test`.
 
-## Roles (who does what)
+The scripts automate host scaffolding only. The Windows install, Cowork install, and all connector logins stay **manual** (James does them) — never assume you can drive the Windows OOBE or authenticate connectors.
 
-Two actors, and the split is deliberate:
-- **Claude Code** runs on the Linux KVM host and does the non-interactive setup: host package install, network/firewall definition, `virt-install`, verification, snapshotting.
-- **James (operator)** does everything interactive inside the guest: the Windows install, all account sign-ins, and every connector login. Never assume you can drive the Windows OOBE or authenticate connectors — those are James's steps.
+## Commands
+
+```bash
+make lint          # shellcheck -x over all scripts + lib
+make test          # run the full bats suite (tests/)
+bats tests/generators.bats                          # one file
+bats tests/wrappers.bats -f "recover_check_disk"    # one test by name
+
+sudo ./install.sh              # fresh build: 00-preflight → 10-network → 20-firewall → 30-observe → 40-create-vm → 50-verify
+sudo ./scripts/90-snapshot.sh  # after manual Windows+Cowork+connector steps: snapshot clean-authed + export XML for ZFS
+sudo ./recover.sh              # after a server death: rebuild scaffolding, re-import domain XML, reattach ZFS-restored qcow2, verify
+```
+
+Prereqs for the test loop: `bats` and `shellcheck` (`apt install bats shellcheck`). `install.sh` itself apt-installs the VM stack and **mutates the host** — only run it on the real box when ready.
+
+## Architecture (the big picture)
+
+The design that makes bash testable: **separate pure generators from thin host-touching wrappers.**
+
+- **`lib/generators.sh`** — pure functions that read config vars from the environment and print an artifact to stdout: `gen_nft_rules`, `gen_net_xml`, `gen_sni_unit`, `gen_logrotate`, `detect_ovmf`, `virt_install_args`. No side effects → unit-tested directly (`tests/generators.bats`).
+- **`scripts/NN-*.sh`** — thin stages that apply a generator's output to the host via `virsh`/`nft`/`systemctl`/`virt-install`. Each exposes a testable function (`apply_network`, `apply_firewall`, `create_vm`, `verify_all`, …) and guards side effects behind `if [ "${BASH_SOURCE[0]}" = "${0}" ]` so tests can source and call the function without touching the host.
+- **`install.sh` / `recover.sh`** — the two entrypoints. The ONLY difference is which stages run: install builds a new VM (stage 40); recover skips 40 and instead re-imports the saved domain XML + reattaches the ZFS-restored disk. This is the whole recovery story.
+- **`config.env`** — the single source of every tunable (VM name, RAM/vCPU/disk, subnet `10.77.0.0/24`, bridge `virbr-cowork`, paths, `LOG_RETAIN_DAYS`, `ZFS_EXPORT_DIR`, `HOST_ADDR`). Sourced by everything via `load_config` in `lib/common.sh`.
+- **`lib/common.sh`** — `log`/`warn`/`die`, `need_cmd`, `require_root`, `confirm`, `cpu_has_virt`, `load_config`, `REPO_ROOT`.
 
 ## Load-bearing constraints (do not violate)
 
-These are the reason the box exists; treat them as invariants, not suggestions:
-1. **No lateral movement.** The guest must not reach RFC1918 LAN hosts (protects ZFS and other lab machines). The host egress firewall dropping `virbr-cowork → {10/8, 172.16/12, 192.168/16, 169.254/16}` is the single highest-value control. Verify from the guest that a known LAN host is unreachable while the internet works.
-2. **Capability gate stays in software.** Network isolation caps crude paths but does not harden agent judgment. Unattended/scheduled Cowork runs produce **drafts and proposals only** — never outbound or irreversible actions without James present to approve.
-3. **The VM is a thin client, not a vault.** No personal data, no imported/copied browser profiles, no SSH keys to other hosts. Connector sessions are the only asset, and they're revocable in seconds from outside.
-4. **Disposable.** Snapshot the clean, authed state so re-auth/corruption is a rollback, not a rebuild.
+1. **No lateral movement.** The `inet cowork` nftables table (`forward` hook, priority `-10`) drops guest→`{10/8, 172.16/12, 192.168/16, 169.254/16}`, allowing only forwarded DNS + 80/443. This is the highest-value control.
+2. **Capability gate stays in software.** Unattended/scheduled Cowork runs produce **drafts and proposals only** — never irreversible actions without James present.
+3. **Thin client, not a vault.** No personal data, no imported browser profiles, no SSH keys to other hosts. Connector sessions are the only asset; revocable in seconds.
+4. **Disposable.** Snapshot the clean-authed state; recovery is a rollback.
+5. **Idempotency.** Every stage is check-then-act and safe to re-run — re-running `install.sh` on a built host must reach verify, not abort. Regressions here are the main defect class.
 
-## Sequencing that matters
+## Non-obvious things (learned the hard way — read before changing)
 
-The buildspec's order is not cosmetic — steps depend on earlier ones:
-- **Network segmentation (§3) before VM creation (§4).** Define the dedicated NAT network `cowork-net` (`10.77.0.0/24`, bridge `virbr-cowork`) and load the nftables rules first, so the guest is fenced from its first boot.
-- **Observe-then-tighten for egress (§3d).** Never start with a restrictive domain allowlist — a broken connector mid-run is exactly the false-positive fatigue to avoid. Run permissive on 443 with dnsmasq query logging + TLS SNI capture → collect a day or two → build a candidate allowlist → shadow-enforce in Squid (still allow all, log misses) → only hard-enforce once the miss list is empty for a stable period. The human should only ever see a hard block *after* the list is proven complete.
+- **Tests use mocks that mostly `exit 0`** (`tests/mocks/{virsh,nft,systemctl,virt-install}`). They validate control flow, **not live tool behavior** — a green suite does NOT mean the scripts work on a real host. Two real bugs (malformed `virt-install` args; `recover.sh` reporting success on a failed start) passed all tests. **The scripts have never been run end-to-end on real hardware.** Where a mock can't model a tool, assert on the *generated artifact* instead.
+- **Guest→resolver DNS does NOT traverse the `cowork` forward chain.** The resolver `10.77.0.1` is the host's own bridge IP → traffic to it hits the **INPUT** hook (governed by libvirt's own rules), never `forward`. So do **not** re-add an `ip daddr $GATEWAY accept` rule to `gen_nft_rules` "to keep DNS working" — it's inert (this was tried and removed). The forward-chain LAN-drop only ever sees genuinely-routed guest→LAN traffic, which is exactly what it must block.
+- **`gen_nft_rules` must stay idempotent.** It emits the atomic `table inet cowork` / `delete table inet cowork` / `table … {…}` idiom so a second `nft -f` doesn't `EEXIST` on the base chain. Don't drop those two leading lines.
+- **`virt_install_args` emits ONE token per line** (each `--flag` and its value on separate lines) so `mapfile -t` splits argv correctly. Never glue `--flag value` onto one line — `virt-install` (argparse) rejects the space-containing token, and the mock won't catch it.
+- **install↔recover filename contract:** `90-snapshot.sh` writes `${NET_NAME}.net.xml` + `${VM_NAME}.domain.xml` under `${ZFS_EXPORT_DIR}`; `recover.sh` re-imports the domain XML by that exact name (the network is rebuilt from config by stage 10, not re-imported). A filename mismatch silently breaks recovery.
+- **`50-verify.sh` uses `set -uo pipefail` (no `-e`) deliberately** so every check runs and one failure doesn't abort the sweep; `verify_all` returns non-zero overall. Don't "standardize" it back to `set -euo`.
+- **Console: SPICE, never RDP.** Cowork's scheduled tasks must live in the interactive console session; RDP detaches it. Remote console is `virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork` — SPICE tunnels over existing SSH (no new ports/rules). Run a **distro-packaged** virt-viewer (patched deps), not the frozen 2021 Windows MSI.
+- **OVMF firmware is detected at runtime** (`detect_ovmf`), never hardcoded — Windows 11 requires UEFI + Secure Boot + TPM 2.0, and the `.secboot` filenames vary by distro.
+- **Ubuntu/Debian only** (`apt`). No RHEL/dnf paths.
 
-## Non-obvious gotchas
+## Git / PR workflow
 
-- **DNS resolver sits inside the LAN-drop range.** The bridge gateway/resolver `10.77.0.1` is within `10.0.0.0/8`, so the lateral-movement drop would also kill DNS. The `dport 53` accepts save it today; if you tighten, add `ip daddr 10.77.0.1 accept` *above* the LAN drop, or exclude `10.77.0.0/24` from the drop set.
-- **libvirt uses its own nft chains.** The `cowork` table hooks `forward` at priority `-10` to run ahead of them; don't assume libvirt's default rules will enforce the isolation.
-- **Console must be SPICE/virt-viewer, not RDP.** Cowork and its scheduled tasks must live in the interactive console session; RDP spawns its own session and detaches the console. For the same reason, launch Cowork "at log on" (interactive), not "at startup".
-- **Windows 11 requires UEFI + Secure Boot + emulated TPM 2.0**, and virtio disk/NIC have no in-box Windows drivers — the `virtio-win.iso` must be mounted so drivers can be loaded during install.
-- **Distro-specific strings are not to be trusted verbatim.** OVMF secure-boot firmware filenames (`OVMF_CODE.secboot.fd` vs `OVMF_CODE_4M.secboot.fd`, etc.) and `virt-install` flag dialects (`--osinfo` vs `--os-variant`) vary by distro/version. Confirm on the actual host (`ls /usr/share/OVMF/`, `virt-host-validate`) rather than copying the buildspec literally.
-- **Downloads from official sources only.** Windows 11 ISO from microsoft.com, virtio-win from fedorapeople.org, Claude desktop from claude.com/download. Verify checksums.
-
-## Open items the buildspec flags (verify, don't assume)
-
-Cowork preview availability on James's plan; the real egress endpoint list (only the obvious hosts are named — anthropic.com, claude.com, claude.ai, Google, Microsoft); and whether connectors broker server-side through claude.ai vs. call out directly from the guest (this changes how much egress the guest needs — observe before locking down).
+Commits and PRs go through a separate bot account (`jpansarasa-bot`, token in `.github-pat-bot`, gitignored) so Claude's work is visually distinct from James's; **James reviews and merges**. See project memory `github-bot-identity` / `github-pat-usage` for the credential-helper pattern that keeps tokens out of `.git/config`.
