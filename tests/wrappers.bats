@@ -32,3 +32,22 @@ setup() {
   [ "$status" -eq 0 ]
   grep -q "virsh net-destroy" "$MOCKLOG"
 }
+
+@test "ensure_include is idempotent" {
+  conf="$BATS_TMPDIR/nftables.conf"; : > "$conf"
+  bash -c 'source lib/common.sh; source scripts/20-firewall.sh;
+           ensure_include "'"$conf"'" "include \"/etc/nftables.d/cowork.nft\""'
+  bash -c 'source lib/common.sh; source scripts/20-firewall.sh;
+           ensure_include "'"$conf"'" "include \"/etc/nftables.d/cowork.nft\""'
+  [ "$(grep -c 'cowork.nft' "$conf")" -eq 1 ]
+}
+
+@test "apply_firewall writes rule file and loads it" {
+  d="$BATS_TMPDIR/nftd"; mkdir -p "$d"; conf="$BATS_TMPDIR/nftables.conf"; : > "$conf"
+  MOCKLOG="$MOCKLOG" run bash -c 'source lib/common.sh; source lib/generators.sh; source scripts/20-firewall.sh;
+           apply_firewall "'"$d"'" "'"$conf"'"'
+  [ "$status" -eq 0 ]
+  [ -f "$d/cowork.nft" ]
+  grep -q 'nft -f' "$MOCKLOG"
+  grep -q '10.0.0.0/8' "$d/cowork.nft"
+}
