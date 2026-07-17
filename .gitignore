@@ -1,0 +1,5 @@
+# Claude Code local settings (machine-specific)
+.claude/
+
+# GitHub personal access token — NEVER commit this
+.github-pat
