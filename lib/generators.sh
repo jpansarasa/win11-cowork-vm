@@ -77,3 +77,43 @@ ${SNI_LOG} ${DNS_LOG} {
 }
 EOF
 }
+
+# Ordered preference of Ubuntu/Debian secure-boot firmware code files.
+detect_ovmf() {
+  local dir="${1:-/usr/share/OVMF}" code
+  for code in OVMF_CODE_4M.secboot.fd OVMF_CODE.secboot.fd OVMF_CODE_4M.ms.fd; do
+    if [ -f "${dir}/${code}" ]; then
+      local vars
+      for vars in OVMF_VARS_4M.fd OVMF_VARS.fd OVMF_VARS_4M.ms.fd; do
+        [ -f "${dir}/${vars}" ] && { echo "${dir}/${code}|${dir}/${vars}"; return 0; }
+      done
+    fi
+  done
+  return 1
+}
+
+virt_install_args() {
+  local pair code vars
+  pair="$(detect_ovmf "${OVMF_DIR:-/usr/share/OVMF}")" || die "no OVMF secure-boot firmware found; install the 'ovmf' package"
+  code="${pair%%|*}"; vars="${pair##*|}"
+  cat <<EOF
+--name ${VM_NAME}
+--osinfo win11
+--memory ${RAM_MB}
+--vcpus ${VCPUS}
+--cpu host-passthrough
+--machine q35
+--features smm.state=on
+--boot loader=${code},loader.readonly=yes,loader.type=pflash,loader.secure=yes,nvram.template=${vars}
+--tpm backend.type=emulator,backend.version=2.0,model=tpm-crb
+--disk path=${DISK_PATH},size=${DISK_GB},format=qcow2,bus=virtio
+--disk path=${WIN_ISO},device=cdrom,boot.order=1
+--disk path=${VIRTIO_ISO},device=cdrom
+--network network=${NET_NAME},model=virtio
+--graphics spice
+--video qxl
+--controller type=usb,model=qemu-xhci
+--sound none
+--noautoconsole
+EOF
+}

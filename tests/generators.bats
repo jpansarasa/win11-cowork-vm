@@ -65,3 +65,30 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"daily"* ]]
   [[ "$output" == *"copytruncate"* ]]
 }
+
+@test "detect_ovmf finds secboot firmware in a fixture dir" {
+  mkdir -p "$BATS_TMPDIR/ovmf"
+  touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
+  run detect_ovmf "$BATS_TMPDIR/ovmf"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OVMF_CODE_4M.secboot.fd|"* ]]
+  [[ "$output" == *"OVMF_VARS_4M.fd"* ]]
+}
+
+@test "detect_ovmf fails when no firmware present" {
+  mkdir -p "$BATS_TMPDIR/empty"
+  run detect_ovmf "$BATS_TMPDIR/empty"
+  [ "$status" -ne 0 ]
+}
+
+@test "virt_install_args requests TPM2, secure boot, virtio, spice, both ISOs" {
+  mkdir -p "$BATS_TMPDIR/ovmf"
+  touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
+  OVMF_DIR="$BATS_TMPDIR/ovmf" run virt_install_args
+  [[ "$output" == *"backend.version=2.0"* ]]
+  [[ "$output" == *"loader.secure=yes"* ]]
+  [[ "$output" == *"bus=virtio"* ]]
+  [[ "$output" == *"--graphics spice"* ]]
+  [[ "$output" == *"${WIN_ISO}"* ]]
+  [[ "$output" == *"${VIRTIO_ISO}"* ]]
+}
