@@ -16,7 +16,8 @@
 - **Console:** VM uses SPICE graphics, never RDP.
 - **Windows 11 firmware:** UEFI + Secure Boot + emulated TPM 2.0 are required; detect the OVMF secure-boot firmware path at runtime, never hardcode.
 - **No secrets in the repo.** Connector logins and Windows setup are out of scope.
-- **Config lives in one place:** `config.env`, sourced by every script. Exact defaults: `VM_NAME=win11-cowork`, `RAM_MB=16384`, `VCPUS=4`, `DISK_GB=100`, `NET_NAME=cowork-net`, `BRIDGE=virbr-cowork`, `SUBNET=10.77.0.0/24`, `NETMASK=255.255.255.0`, `GATEWAY=10.77.0.1`, `DHCP_START=10.77.0.10`, `DHCP_END=10.77.0.100`, `IMAGE_DIR=/var/lib/libvirt/images`, `DISK_PATH=${IMAGE_DIR}/win11-cowork.qcow2`, `WIN_ISO=${IMAGE_DIR}/Win11.iso`, `VIRTIO_ISO=${IMAGE_DIR}/virtio-win.iso`, `DNS_LOG=/var/log/libvirt/cowork-dns.log`, `SNI_LOG=/var/log/libvirt/cowork-sni.log`, `LOG_RETAIN_DAYS=14`, `ZFS_EXPORT_DIR=/var/lib/libvirt/images/cowork-state`.
+- **Config lives in one place:** `config.env`, sourced by every script. Exact defaults: `VM_NAME=win11-cowork`, `RAM_MB=16384`, `VCPUS=4`, `DISK_GB=100`, `NET_NAME=cowork-net`, `BRIDGE=virbr-cowork`, `SUBNET=10.77.0.0/24`, `NETMASK=255.255.255.0`, `GATEWAY=10.77.0.1`, `DHCP_START=10.77.0.10`, `DHCP_END=10.77.0.100`, `IMAGE_DIR=/var/lib/libvirt/images`, `DISK_PATH=${IMAGE_DIR}/win11-cowork.qcow2`, `WIN_ISO=${IMAGE_DIR}/Win11.iso`, `VIRTIO_ISO=${IMAGE_DIR}/virtio-win.iso`, `DNS_LOG=/var/log/libvirt/cowork-dns.log`, `SNI_LOG=/var/log/libvirt/cowork-sni.log`, `LOG_RETAIN_DAYS=14`, `ZFS_EXPORT_DIR=/var/lib/libvirt/images/cowork-state`, `HOST_ADDR=you@your-host`.
+- **Host reachability is out of scope for automation.** The operator drives the guest console with `virt-viewer --connect qemu+ssh://${HOST_ADDR}/system ${VM_NAME}`, which tunnels SPICE over the operator's **existing** SSH access to the host. No avahi/mDNS, no DNS records, no SPICE ports exposed, no new firewall rule (reuses the SSH path already open). `HOST_ADDR` exists only to print a copy-pasteable connect string.
 - **Stage order:** install = `00→10→20→30→40→50`; recover = `00→10→20→30→(re-import XML + reattach disk)→50`. `90-snapshot.sh` is run manually after a clean auth.
 
 ---
@@ -119,6 +120,8 @@ DNS_LOG=/var/log/libvirt/cowork-dns.log
 SNI_LOG=/var/log/libvirt/cowork-sni.log
 LOG_RETAIN_DAYS=14
 ZFS_EXPORT_DIR=${IMAGE_DIR}/cowork-state
+# Address you already SSH to for this host — only used to print the virt-viewer connect string.
+HOST_ADDR=you@your-host
 ```
 
 `lib/common.sh`:
@@ -1295,6 +1298,15 @@ sudo ./recover.sh     # after a server death: rebuild host scaffolding, re-impor
 
 Recovery assumes ZFS has already restored the qcow2 to `DISK_PATH` and the
 exported XML to `ZFS_EXPORT_DIR`. Dev: `make lint` (shellcheck), `make test` (bats).
+
+**Reaching the console from a workstation** (no new services or firewall rules —
+it reuses the SSH access you already have to the host; SPICE tunnels inside it):
+
+```bash
+virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork
+```
+
+The guest lives on a host-internal NAT network; it is never visible on the LAN.
 
 Egress visibility is always-on: dnsmasq query logging plus a persistent
 `cowork-sni.service` TLS-SNI capture, both rotated over a rolling ~14-day
