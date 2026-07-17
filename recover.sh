@@ -15,12 +15,8 @@ recover_check_disk() {
 
 recover_import() {
   need_cmd virsh
-  local net="${ZFS_EXPORT_DIR}/${NET_NAME}.net.xml" dom="${ZFS_EXPORT_DIR}/${VM_NAME}.domain.xml"
-  if [ -f "$net" ]; then
-    virsh net-define "$net" || die "failed to import net XML from $net"
-  else
-    warn "no exported net XML; network already rebuilt by stage 10"
-  fi
+  # The network is rebuilt deterministically by stage 10-network; only the domain is re-imported.
+  local dom="${ZFS_EXPORT_DIR}/${VM_NAME}.domain.xml"
   [ -f "$dom" ] || die "no exported domain XML at ${dom} — cannot re-import the VM"
   virsh define "$dom"
 }

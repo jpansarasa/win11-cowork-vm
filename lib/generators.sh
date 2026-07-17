@@ -3,6 +3,8 @@
 
 gen_nft_rules() {
   cat <<EOF
+table inet cowork
+delete table inet cowork
 table inet cowork {
   chain forward {
     type filter hook forward priority -10; policy accept;

@@ -61,11 +61,11 @@ setup() {
   grep -q "copytruncate" "$lr"
 }
 
-@test "create_vm refuses when domain already exists" {
+@test "create_vm skips (success no-op) when domain already exists" {
   VIRSH_DOM_EXISTS=1 OVMF_DIR="$BATS_TMPDIR/ovmf" run bash -c \
     'mkdir -p "$OVMF_DIR"; touch "$OVMF_DIR/OVMF_CODE_4M.secboot.fd" "$OVMF_DIR/OVMF_VARS_4M.fd";
      source lib/common.sh; source lib/generators.sh; source scripts/40-create-vm.sh; create_vm'
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 0 ]
   ! grep -q "virt-install" "$MOCKLOG"
 }
 

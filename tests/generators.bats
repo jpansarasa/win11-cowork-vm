@@ -17,7 +17,7 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   gen_nft_rules > "$BATS_TMPDIR/rules.nft"
   local gw drop
   gw=$(grep -n "ip daddr ${GATEWAY} accept" "$BATS_TMPDIR/rules.nft" | head -1 | cut -d: -f1)
-  drop=$(grep -n '10.0.0.0/8' "$BATS_TMPDIR/rules.nft" | head -1 | cut -d: -f1)
+  drop=$(grep -n 'ip daddr {' "$BATS_TMPDIR/rules.nft" | head -1 | cut -d: -f1)
   [ -n "$gw" ] && [ -n "$drop" ] && [ "$gw" -lt "$drop" ]
 }
 
@@ -27,6 +27,11 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"tcp dport 53 accept"* ]]
   [[ "$output" == *"tcp dport { 80, 443 } accept"* ]]
   [[ "$output" == *"iifname \"${BRIDGE}\" counter drop"* ]]
+}
+
+@test "gen_nft_rules is re-appliable (atomic delete+recreate idiom)" {
+  run gen_nft_rules
+  [[ "$output" == *"delete table inet cowork"* ]]
 }
 
 @test "gen_net_xml sets name, bridge, and NAT" {
