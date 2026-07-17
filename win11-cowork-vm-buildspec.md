@@ -239,8 +239,14 @@ Notes:
 Attach with the console — **use SPICE/virt-viewer, not RDP** (RDP spawns its own session and detaches the console session the app and scheduled tasks must live in):
 
 ```bash
+# On the host itself:
 virt-viewer --connect qemu:///system win11-cowork
+
+# From a workstation — tunnels SPICE inside your existing SSH access, no new ports/rules:
+virt-viewer --connect qemu+ssh://<you>@<host>/system win11-cowork
 ```
+
+**Console client (security):** run **distro-packaged `virt-viewer` on a Linux machine**, where its spice-gtk/GTK/GLib/GStreamer dependencies are current and CVE-patched. **Avoid the Windows MSI (11.0, 2021)** — its bundled parsing stack is frozen at 2021 and carries years of unpatched memory-safety CVEs in exactly the framebuffer/image-decode paths a display client exercises. Keep the SPICE console bound to the host's loopback (the default here) so it is reachable only through the SSH tunnel — nothing but your own qemu can feed the client.
 
 During setup:
 1. At disk selection, if no disk appears, **Load driver** → browse the virtio-win CD → `viostor\w11\amd64` (storage), then `NetKVM\w11\amd64` (network) if needed.
