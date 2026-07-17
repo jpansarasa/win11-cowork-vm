@@ -101,3 +101,18 @@ setup() {
   [ -s "$dest/${NET_NAME}.net.xml" ] || [ -s "$dest/cowork-net.net.xml" ]
   [ -s "$dest/${VM_NAME}.domain.xml" ] || [ -s "$dest/win11-cowork.domain.xml" ]
 }
+
+@test "recover_check_disk aborts when the restored qcow2 is missing" {
+  DISK_PATH="$BATS_TMPDIR/nope.qcow2" run bash -c \
+    'source lib/common.sh; load_config; DISK_PATH="'"$BATS_TMPDIR"'/nope.qcow2";
+     source recover.sh; recover_check_disk'
+  [ "$status" -ne 0 ]
+}
+
+@test "recover_check_disk passes when the disk is present" {
+  touch "$BATS_TMPDIR/disk.qcow2"
+  DISK_PATH="$BATS_TMPDIR/disk.qcow2" run bash -c \
+    'source lib/common.sh; load_config; DISK_PATH="'"$BATS_TMPDIR"'/disk.qcow2";
+     source recover.sh; recover_check_disk'
+  [ "$status" -eq 0 ]
+}
