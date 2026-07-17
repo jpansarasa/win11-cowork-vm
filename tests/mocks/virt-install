@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "virt-install $*" >> "${MOCKLOG:-/dev/null}"
+exit 0
