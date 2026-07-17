@@ -4,3 +4,6 @@
 # GitHub personal access tokens — NEVER commit these
 .github-pat
 .github-pat-bot
+
+# Subagent-driven-development scratch
+.superpowers/

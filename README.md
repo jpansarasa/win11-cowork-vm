@@ -53,6 +53,49 @@ Egress is locked down by **observe-then-tighten**: run permissive with DNS/SNI l
 - Official Windows 11 and [virtio-win](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/) ISOs
 - A Claude account with Cowork preview access
 
+## Scripts
+
+Idempotent bash collateral automates the **Linux host** side of the buildspec
+(the Windows install and connector logins stay manual). Tunables live in
+`config.env`.
+
+```bash
+sudo ./install.sh     # fresh build: preflight → network → firewall → observe → create VM → verify
+# ... do the manual Windows + Cowork + connector steps ...
+sudo ./scripts/90-snapshot.sh   # snapshot the clean authed state + export XML for ZFS
+
+sudo ./recover.sh     # after a server death: rebuild host scaffolding, re-import XML,
+                      # reattach the ZFS-restored qcow2, verify
+```
+
+Recovery assumes ZFS has already restored the qcow2 to `DISK_PATH` and the
+exported XML to `ZFS_EXPORT_DIR`. Dev: `make lint` (shellcheck), `make test` (bats).
+
+**Shipped egress posture:** the firewall hard-enforces a fixed DNS + 80/443
+allowlist from first boot — there is no permissive observation window. The
+always-on DNS/SNI logging is for ongoing visibility (auditing what the guest
+reaches), not for deriving the allowlist.
+
+**Reaching the console from a workstation** (no new services or firewall rules —
+it reuses the SSH access you already have to the host; SPICE tunnels inside it):
+
+```bash
+virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork
+```
+
+**Console client (security):** run distro-packaged `virt-viewer` on a Linux
+machine (current, CVE-patched spice-gtk/GTK/GStreamer). Avoid the Windows MSI
+(as of 2026-07, still 11.0/2021 — re-check before trusting) — its bundled
+parsing stack is frozen and carries years of unpatched memory-safety CVEs.
+SPICE stays bound to the host's loopback and is reached only through the SSH
+tunnel.
+
+The guest lives on a host-internal NAT network; it is never visible on the LAN.
+
+Egress visibility is always-on: dnsmasq query logging plus a persistent
+`cowork-sni.service` TLS-SNI capture, both rotated over a rolling ~14-day
+window (`LOG_RETAIN_DAYS`).
+
 ## Disclaimer
 
 Provided as-is, for an isolated single-host lab setup. Firmware paths and `virt-install` flag dialects vary by distro — verify on your actual host rather than copying literally. Network isolation reduces risk; it does not replace good judgment about what an agent is allowed to do.
