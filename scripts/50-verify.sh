@@ -26,8 +26,8 @@ verify_all() {
   _check "domain has TPM 2.0"             bash -c "virsh dumpxml '${VM_NAME}' | grep -q \"version='2.0'\""
   _check "domain has secure boot"         bash -c "virsh dumpxml '${VM_NAME}' | grep -q \"secure='yes'\""
   _check "cowork-sni.service active"      systemctl is-active cowork-sni.service
-  _check "DNS_LOG dir writable"           bash -c "touch '${DNS_LOG}' 2>/dev/null || [ -w \"\$(dirname '${DNS_LOG}')\" ]"
-  _check "SNI_LOG dir writable"           bash -c "touch '${SNI_LOG}' 2>/dev/null || [ -w \"\$(dirname '${SNI_LOG}')\" ]"
+  _check "DNS_LOG dir writable"           bash -c "if [ -e '${DNS_LOG}' ]; then [ -w '${DNS_LOG}' ]; else [ -w \"\$(dirname '${DNS_LOG}')\" ]; fi"
+  _check "SNI_LOG dir writable"           bash -c "if [ -e '${SNI_LOG}' ]; then [ -w '${SNI_LOG}' ]; else [ -w \"\$(dirname '${SNI_LOG}')\" ]; fi"
   [ "$_fails" -eq 0 ] || return 1
 }
 
