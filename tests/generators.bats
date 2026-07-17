@@ -46,3 +46,22 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   run gen_net_xml
   [[ "$output" == *"start='${DHCP_START}' end='${DHCP_END}'"* ]]
 }
+
+@test "gen_sni_unit captures timestamped SNI and restarts always" {
+  run gen_sni_unit
+  [[ "$output" == *"-i ${BRIDGE}"* ]]
+  [[ "$output" == *"frame.time_epoch"* ]]
+  [[ "$output" == *"tls.handshake.extensions_server_name"* ]]
+  [[ "$output" == *"append:${SNI_LOG}"* ]]
+  [[ "$output" == *"Restart=always"* ]]
+  [[ "$output" == *"WantedBy=multi-user.target"* ]]
+}
+
+@test "gen_logrotate rotates both logs on a rolling window" {
+  run gen_logrotate
+  [[ "$output" == *"${SNI_LOG}"* ]]
+  [[ "$output" == *"${DNS_LOG}"* ]]
+  [[ "$output" == *"rotate ${LOG_RETAIN_DAYS}"* ]]
+  [[ "$output" == *"daily"* ]]
+  [[ "$output" == *"copytruncate"* ]]
+}

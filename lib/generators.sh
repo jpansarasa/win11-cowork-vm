@@ -45,3 +45,35 @@ gen_net_xml() {
 </network>
 EOF
 }
+
+gen_sni_unit() {
+  cat <<EOF
+[Unit]
+Description=Cowork VM egress TLS-SNI capture
+After=network.target libvirtd.service
+
+[Service]
+# Runs as root so it can capture on the bridge without the wireshark group dance.
+ExecStart=/usr/bin/tshark -i ${BRIDGE} -l -f 'tcp port 443' -Y 'tls.handshake.type==1' -T fields -e frame.time_epoch -e tls.handshake.extensions_server_name
+StandardOutput=append:${SNI_LOG}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+gen_logrotate() {
+  cat <<EOF
+${SNI_LOG} ${DNS_LOG} {
+    daily
+    rotate ${LOG_RETAIN_DAYS}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+}
