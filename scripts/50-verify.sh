@@ -23,6 +23,7 @@ verify_all() {
   _check "network ${NET_NAME} active"     virsh net-info "${NET_NAME}"
   _check "nft cowork table loaded"        nft list table inet cowork
   _check "domain ${VM_NAME} defined"      virsh dominfo "${VM_NAME}"
+  _check "domain ${VM_NAME} running"      bash -c "virsh domstate '${VM_NAME}' | grep -q '^running$'"
   _check "domain has TPM 2.0"             bash -c "virsh dumpxml '${VM_NAME}' | grep -q \"version='2.0'\""
   _check "domain has secure boot"         bash -c "virsh dumpxml '${VM_NAME}' | grep -q \"secure='yes'\""
   _check "cowork-sni.service active"      systemctl is-active cowork-sni.service

@@ -86,6 +86,14 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "verify_all fails when the domain is not running" {
+  VIRSH_NET_EXISTS=1 VIRSH_DOM_EXISTS=1 NFT_TABLE_EXISTS=1 SYSTEMCTL_ACTIVE=1 VIRSH_DOMSTATE="shut off" \
+  run bash -c 'source lib/common.sh; load_config;
+    DNS_LOG="'"$BATS_TMPDIR"'/dns.log"; SNI_LOG="'"$BATS_TMPDIR"'/sni.log";
+    source scripts/50-verify.sh; verify_all'
+  [ "$status" -ne 0 ]
+}
+
 @test "verify_all fails when the nft table is missing" {
   VIRSH_NET_EXISTS=1 VIRSH_DOM_EXISTS=1 NFT_TABLE_EXISTS=0 SYSTEMCTL_ACTIVE=1 \
   run bash -c 'source lib/common.sh; load_config;

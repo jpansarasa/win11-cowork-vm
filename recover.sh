@@ -28,7 +28,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   done
   recover_check_disk
   recover_import
-  virsh start "${VM_NAME}" || warn "domain start failed — inspect with virsh dominfo ${VM_NAME}"
+  virsh start "${VM_NAME}" || die "domain ${VM_NAME} failed to start — recovery incomplete; inspect: virsh dominfo ${VM_NAME}"
   bash "${HERE}/scripts/50-verify.sh"
   log "recovery complete"
 fi
