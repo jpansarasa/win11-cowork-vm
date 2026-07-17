@@ -1306,6 +1306,12 @@ it reuses the SSH access you already have to the host; SPICE tunnels inside it):
 virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork
 ```
 
+**Console client (security):** run distro-packaged `virt-viewer` on a Linux
+machine (current, CVE-patched spice-gtk/GTK/GStreamer). Avoid the Windows MSI
+(11.0, 2021) — its bundled parsing stack is frozen and carries years of
+unpatched memory-safety CVEs. SPICE stays bound to the host's loopback and is
+reached only through the SSH tunnel.
+
 The guest lives on a host-internal NAT network; it is never visible on the LAN.
 
 Egress visibility is always-on: dnsmasq query logging plus a persistent
