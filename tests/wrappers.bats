@@ -51,3 +51,12 @@ setup() {
   grep -q 'nft -f' "$MOCKLOG"
   grep -q '10.0.0.0/8' "$d/cowork.nft"
 }
+
+@test "install_observability writes unit and logrotate files" {
+  unit="$BATS_TMPDIR/cowork-sni.service"; lr="$BATS_TMPDIR/cowork.logrotate"
+  run bash -c 'source lib/common.sh; source lib/generators.sh; source scripts/30-observe.sh;
+           install_observability "'"$unit"'" "'"$lr"'"'
+  [ "$status" -eq 0 ]
+  grep -q "Restart=always" "$unit"
+  grep -q "copytruncate" "$lr"
+}
