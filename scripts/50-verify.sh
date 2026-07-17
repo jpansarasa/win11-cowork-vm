@@ -14,8 +14,9 @@ load_config
 _fails=0
 _check() { # name, command...
   local name="$1"; shift
-  if "$@" >/dev/null 2>&1; then printf 'PASS  %s\n' "$name"
-  else printf 'FAIL  %s\n' "$name"; _fails=$((_fails+1)); fi
+  local out
+  if out="$("$@" 2>&1)"; then printf 'PASS  %s\n' "$name"
+  else printf 'FAIL  %s\n' "$name"; [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/      /'; _fails=$((_fails+1)); fi
 }
 
 verify_all() {

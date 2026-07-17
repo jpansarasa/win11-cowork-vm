@@ -10,7 +10,9 @@ PACKAGES=(qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients
 
 preflight_check_virt() {
   local cpuinfo="${CPUINFO_FILE:-/proc/cpuinfo}" kvm="${KVM_DEV:-/dev/kvm}"
-  cpu_has_virt "$(cat "$cpuinfo")" || die "no CPU virtualization (vmx/svm) present"
+  local flags
+  flags="$(cat "$cpuinfo")" || die "cannot read ${cpuinfo} to check CPU virtualization"
+  cpu_has_virt "$flags" || die "no CPU virtualization (vmx/svm) present"
   [ -e "$kvm" ] || die "KVM device $kvm missing — is virtualization enabled in BIOS?"
 }
 
