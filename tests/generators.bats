@@ -28,3 +28,21 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"tcp dport { 80, 443 } accept"* ]]
   [[ "$output" == *"iifname \"${BRIDGE}\" counter drop"* ]]
 }
+
+@test "gen_net_xml sets name, bridge, and NAT" {
+  run gen_net_xml
+  [[ "$output" == *"<name>${NET_NAME}</name>"* ]]
+  [[ "$output" == *"<bridge name='${BRIDGE}'"* ]]
+  [[ "$output" == *"<forward mode='nat'/>"* ]]
+}
+
+@test "gen_net_xml enables dnsmasq query logging to DNS_LOG" {
+  run gen_net_xml
+  [[ "$output" == *"log-queries"* ]]
+  [[ "$output" == *"log-facility=${DNS_LOG}"* ]]
+}
+
+@test "gen_net_xml carries the DHCP range" {
+  run gen_net_xml
+  [[ "$output" == *"start='${DHCP_START}' end='${DHCP_END}'"* ]]
+}

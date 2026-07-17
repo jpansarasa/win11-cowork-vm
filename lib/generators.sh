@@ -26,3 +26,22 @@ table inet cowork {
 }
 EOF
 }
+
+gen_net_xml() {
+  cat <<EOF
+<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
+  <name>${NET_NAME}</name>
+  <forward mode='nat'/>
+  <bridge name='${BRIDGE}' stp='on' delay='0'/>
+  <ip address='${GATEWAY}' netmask='${NETMASK}'>
+    <dhcp>
+      <range start='${DHCP_START}' end='${DHCP_END}'/>
+    </dhcp>
+  </ip>
+  <dnsmasq:options>
+    <dnsmasq:option value='log-queries'/>
+    <dnsmasq:option value='log-facility=${DNS_LOG}'/>
+  </dnsmasq:options>
+</network>
+EOF
+}
