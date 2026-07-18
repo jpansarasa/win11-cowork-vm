@@ -92,12 +92,19 @@ foreach ($pat in $RemovePatterns) {
   Get-AppxPackage -AllUsers $pat -ErrorAction SilentlyContinue | ForEach-Object {
     if ($_.Name -match $KeepGuard) { Note "  SKIP (keep-guard): $($_.Name)"; return }
     if ($DryRun) { Note "  would remove: $($_.Name)"; return }
-    Note "  remove: $($_.Name)"
-    Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction SilentlyContinue
+    # Per-item try/catch: some inbox/framework packages (e.g. XboxGameCallableUI)
+    # are protected and error 0x80070032 on removal. Skip those, never abort.
+    try {
+      Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction Stop
+      Note "  removed: $($_.Name)"
+    } catch {
+      Note "  SKIP (not removable): $($_.Name)"
+      return
+    }
     Get-AppxProvisionedPackage -Online |
       Where-Object DisplayName -EQ $_.Name |
       ForEach-Object {
-        Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue | Out-Null
+        try { Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction Stop | Out-Null } catch { }
       }
   }
 }
