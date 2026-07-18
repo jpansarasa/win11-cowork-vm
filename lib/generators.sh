@@ -22,6 +22,19 @@ table inet cowork {
     # Everything else from the guest: drop
     iifname "${BRIDGE}" counter drop
   }
+
+  chain input {
+    type filter hook input priority -10; policy accept;
+
+    # HARD BLOCK: guest -> the HOST itself. Traffic to any of the host's own
+    # addresses (its LAN IP, the bridge IP, ...) is delivered via the INPUT hook,
+    # not FORWARD, so the forward chain above never sees it. The guest may use
+    # ONLY the host's dnsmasq (DNS + DHCP) on the bridge; every other host service
+    # (SSH, Webmin, NFS/SMB/ZFS shares, docker, ...) is unreachable from the guest.
+    iifname "${BRIDGE}" udp dport { 53, 67 } accept
+    iifname "${BRIDGE}" tcp dport 53 accept
+    iifname "${BRIDGE}" counter drop
+  }
 }
 EOF
 }

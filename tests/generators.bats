@@ -38,6 +38,17 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"delete table inet cowork"* ]]
 }
 
+@test "gen_nft_rules blocks guest->host via the input hook (allow only DNS/DHCP)" {
+  # Traffic to the host's OWN addresses is delivered via the INPUT hook, not
+  # FORWARD, so the forward chain can't protect the host's services (SSH, NFS,
+  # ZFS shares). An input chain must drop guest->host except the host resolver.
+  run gen_nft_rules
+  [[ "$output" == *"hook input priority -10"* ]]
+  [[ "$output" == *'iifname "'"${BRIDGE}"'" udp dport { 53, 67 } accept'* ]]
+  # a catch-all guest->host drop must exist (2 bridge drops total: forward + input)
+  [ "$(printf '%s\n' "$output" | grep -c "iifname \"${BRIDGE}\" counter drop")" -ge 2 ]
+}
+
 @test "gen_net_xml sets name, bridge, and NAT" {
   run gen_net_xml
   [[ "$output" == *"<name>${NET_NAME}</name>"* ]]
