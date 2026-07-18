@@ -101,6 +101,10 @@ table inet cowork {
     # Allow return traffic
     ct state established,related accept
 
+    # HARD BLOCK: all guest IPv6 (v4-only guest — the web accepts below are
+    # family-agnostic, so drop v6 first or the guest could reach a v6 host on 443)
+    iifname "virbr-cowork" meta nfproto ipv6 counter drop
+
     # HARD BLOCK: guest -> private LAN (no lateral movement)
     iifname "virbr-cowork" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } \
       counter drop
