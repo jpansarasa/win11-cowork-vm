@@ -256,11 +256,18 @@ Attach with the console — **use SPICE/virt-viewer, not RDP** (RDP spawns its o
 # On the host itself:
 virt-viewer --connect qemu:///system win11-cowork
 
-# From a workstation — tunnels SPICE inside your existing SSH access, no new ports/rules:
-virt-viewer --connect qemu+ssh://<you>@<host>/system win11-cowork
+# From a LINUX workstation — qemu+ssh auto-discovers the loopback SPICE port and
+# tunnels it inside your existing SSH. No manual tunnel, no pinned port, no new rules:
+remote-viewer --connect qemu+ssh://<you>@<host>/system win11-cowork
+
+# From a WINDOWS desktop — add ?command=ssh so libvirt drives Windows' OWN OpenSSH
+# (ssh.exe) as the transport. Same auto-tunnel; see the note for why this is needed:
+remote-viewer --connect "qemu+ssh://<you>@<host>/system?command=ssh" win11-cowork
 ```
 
-**Console client (security):** run **distro-packaged `virt-viewer` on a Linux machine**, where its spice-gtk/GTK/GLib/GStreamer dependencies are current and CVE-patched. **Avoid the Windows MSI (11.0, 2021)** — its bundled parsing stack is frozen at 2021 and carries years of unpatched memory-safety CVEs in exactly the framebuffer/image-decode paths a display client exercises. Keep the SPICE console bound to the host's loopback (the default here) so it is reachable only through the SSH tunnel — nothing but your own qemu can feed the client.
+**Why `?command=ssh` on Windows (don't hand-roll an `ssh -L` tunnel).** The bare `qemu+ssh://` fails from the 2021 virt-viewer MSI with *"unable to connect to libvirt"* — and `?no_verify=1` doesn't help. The cause isn't host-key verification: the MSI's frozen SSH library shares **no key-exchange algorithm** with a modern OpenSSH server (this host offers only curve25519/sntrup761/sha256 KEX — no SHA-1), so the handshake dies *before* host-key checks. `command=ssh` hands the entire SSH conversation to Windows' built-in OpenSSH 9.x (`C:\Windows\System32\OpenSSH\ssh.exe`), which negotiates fine and reuses your `~/.ssh/config`, agent, and `known_hosts`. libvirt ≥ 7.8 on the host bridges that ssh stdio to its socket via `virt-ssh-helper` (native proxy), so **no `nc` and no manual tunnel** — libvirt discovers the loopback SPICE port and forwards it for you. One-time Windows prereqs: (1) `where ssh` resolves (built into Win10/11); (2) `ssh <you>@<host>` logs in **non-interactively** via a key + ssh-agent — remote-viewer spawns `ssh.exe` with no place to type a password; (3) run that `ssh` once to accept/store the host key. If the native proxy ever misbehaves, append `&proxy=netcat` (the host's `nc` is netcat-openbsd, `-U`-capable).
+
+**Console client (security):** `command=ssh` fixes the *transport* only. The virt-viewer *display* stack (spice-gtk/GTK/GLib/image-decode) on the frozen 2021 MSI still carries unpatched memory-safety CVEs in exactly the framebuffer paths a display client exercises. Keeping SPICE bound to the host loopback (the default here) means only your own qemu on the host can feed the client over the SSH channel, so the residual exposure is a *compromised guest* driving the SPICE stream — bounded, but real. The stronger posture is a **distro-packaged `virt-viewer`** (current, CVE-patched deps) — natively on Linux, or via WSLg on the Windows desktop; `?command=ssh` is unnecessary there since those builds already ship modern OpenSSH crypto.
 
 During setup:
 1. At disk selection, if no disk appears, **Load driver** → browse the virtio-win CD → `viostor\w11\amd64` (storage), then `NetKVM\w11\amd64` (network) if needed.
