@@ -283,30 +283,24 @@ Post-first-boot, install guest tools from the virtio-win CD: run `virtio-win-gue
 
 ---
 
-## 6. Windows configuration for 24/7 unattended hosting
+## 6. Post-first-boot configuration (24/7 unattended hosting)
 
-Run from an elevated PowerShell / cmd:
+This is the whole guest-side config, in order. The **mechanical, non-interactive** steps are scripted — run **`guest/postboot.ps1`** once in an **elevated** PowerShell inside the guest (idempotent; `-DryRun` previews the debloat, `-TimeZone '<zone>'` overrides the default). The rest stays manual **by design** — credentials and Cowork/connector auth are never driven by a script (see Design principle: connectors are manual).
 
-```powershell
-# Never sleep / hibernate / blank in a way that suspends the session
-powercfg /change standby-timeout-ac 0
-powercfg /change hibernate-timeout-ac 0
-powercfg /change monitor-timeout-ac 0
-powercfg /hibernate off
+**Checklist (in order):**
+1. **Guest tools** — install `virtio-win-guest-tools.exe` from the virtio-win CD (qemu-ga + SPICE + NIC/balloon). **qemu-ga is load-bearing**: host snapshots (`domfsfreeze`) and time-sync (`domtime`) go through it.
+2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), and a curated **debloat**.
+3. **Confirm firmware:** `Get-Tpm` (TpmReady = True), `Confirm-SecureBootUEFI` (True). After the later reboot, `Get-Service vmcompute, hns` should both be Running (vfpext loads on demand).
+4. **Autologon** — **Sysinternals Autologon** (stores the credential via LSA, not plaintext registry; sidesteps the hidden `netplwiz` checkbox on Win11 local accounts). Makes reboots self-healing. *[manual — credential]*
+5. **Claude** — install from **https://claude.com/download**, sign in, enable Cowork, then Advanced options → *Runs at log-in* = **On** and *Let this app run in background* = **Always** (see the launch-at-logon note below). *[manual — auth]*
+6. **Connectors** — §8, least privilege + MFA. *[manual — auth]*
+7. **Reboot** — applies the HCS features; verify the self-heal (autologon → Claude launches in the console session → clock correct), then **re-snapshot on the host** (§9).
 
-# Confirm TPM + Secure Boot took
-Get-Tpm                      # TpmPresent/TpmReady = True
-Confirm-SecureBootUEFI       # True
+**Never uninstall (the debloat's KEEP-list, and don't remove them by other means either):** the **QEMU guest agent / VirtIO guest tools** and **SPICE tools** (removing them silently breaks snapshots, host time-sync, and the console), a **browser** (Edge — Cowork's browser control and connector logins need one), and **Claude**. These aren't Appx packages, so `postboot.ps1`'s debloat can't reach them — the guard is belt-and-suspenders.
 
-# Cowork's sandbox is Windows HCS (vmcompute/hns/vfpext) — it needs the guest's
-# own virtualization stack. Enable it (reboot when prompted), then confirm.
-Enable-WindowsOptionalFeature -Online -All -NoRestart -FeatureName `
-  Microsoft-Hyper-V, Containers, VirtualMachinePlatform
-# after reboot:
-Get-Service vmcompute, hns   # both Running  (vfpext loads on demand)
-```
+**Windows Features (`optionalfeatures.exe`) — nothing to turn off.** On a current Win11 the deprecated/wormable components (SMB 1.0, Telnet, TFTP, WSL1, IIS, NFS, MSMQ, Simple TCPIP…) are already unchecked by default. **Keep on:** Hyper-V, Containers, Virtual Machine Platform (the HCS requirement). *Windows Hypervisor Platform* can stay off — it's for third-party hypervisors, not Cowork.
 
-- **Nested virt is a hard dependency here:** if the host didn't enable `kvm_intel nested=1` (§1), these guest features install but the HCS services fail to start and Cowork reports `Missing hcs services: hns, vmcompute, vfpext`. Fix it on the host, not in the guest.
+- **Nested virt is a hard dependency here:** if the host didn't enable `kvm_intel nested=1` (§1), the HCS features install but the services fail to start and Cowork reports `Missing hcs services: hns, vmcompute, vfpext`. Fix it on the host, not in the guest.
 
 - **Autologon (console session):** James is fine with this on the isolated box. Prefer **Sysinternals Autologon** (stores the credential via LSA rather than plaintext registry) over `netplwiz`. This makes reboots self-healing.
 - **Disable the lock screen timeout** so the console session doesn't lock out from under the app.
