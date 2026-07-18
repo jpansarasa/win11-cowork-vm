@@ -61,6 +61,15 @@ setup() {
   grep -q "copytruncate" "$lr"
 }
 
+@test "install_timesync writes the service + timer units" {
+  svc="$BATS_TMPDIR/cowork-timesync.service"; tmr="$BATS_TMPDIR/cowork-timesync.timer"
+  run bash -c 'source lib/common.sh; load_config; source lib/generators.sh; source scripts/35-timesync.sh;
+           install_timesync "'"$svc"'" "'"$tmr"'"'
+  [ "$status" -eq 0 ]
+  grep -q "domtime ${VM_NAME} --time" "$svc"
+  grep -q "OnUnitActiveSec=1h" "$tmr"
+}
+
 @test "create_vm skips (success no-op) when domain already exists" {
   VIRSH_DOM_EXISTS=1 OVMF_DIR="$BATS_TMPDIR/ovmf" run bash -c \
     'mkdir -p "$OVMF_DIR"; touch "$OVMF_DIR/OVMF_CODE_4M.secboot.fd" "$OVMF_DIR/OVMF_VARS_4M.fd";

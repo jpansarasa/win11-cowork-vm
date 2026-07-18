@@ -18,7 +18,7 @@ make test          # run the full bats suite (tests/)
 bats tests/generators.bats                          # one file
 bats tests/wrappers.bats -f "recover_check_disk"    # one test by name
 
-sudo ./install.sh              # fresh build: 00-preflight → 10-network → 20-firewall → 30-observe → 40-create-vm → 50-verify
+sudo ./install.sh              # fresh build: 00-preflight → 10-network → 20-firewall → 30-observe → 35-timesync → 40-create-vm → 50-verify
 sudo ./scripts/90-snapshot.sh  # after manual Windows+Cowork+connector steps: export XML into the dataset, then VSS-quiesce + `zfs snapshot tank/coworkvm@clean-authed`
 sudo ./recover.sh              # after a server death: `zfs rollback`/`recv` the dataset to @clean-authed FIRST, then rebuild scaffolding + re-import domain XML + verify
 ```
@@ -54,6 +54,7 @@ The design that makes bash testable: **separate pure generators from thin host-t
 - **`50-verify.sh` uses `set -uo pipefail` (no `-e`) deliberately** so every check runs and one failure doesn't abort the sweep; `verify_all` returns non-zero overall. Don't "standardize" it back to `set -euo`.
 - **Console: SPICE, never RDP.** Cowork's scheduled tasks must live in the interactive console session; RDP detaches it. Remote console is `virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork` — libvirt auto-discovers the loopback SPICE port and tunnels it over existing SSH (no new ports/rules, no manual `ssh -L`). **This requires a LINUX client.** The native Windows virt-viewer (11.0/2021 is the newest that exists) cannot do it — libvirt's `unix`/`ssh`/`ext` transports are unsupported on Windows, the MSI ships only a `libssh2` that fails at the SSH banner, and `tls`/`tcp` need a new libvirtd port (forbidden). Don't chase `?command=ssh`/`qemu+libssh2://` on Windows — proven dead ends. From a Windows desktop, run the **distro-packaged** virt-viewer inside **WSL2/WSLg**. See buildspec §5.
 - **OVMF firmware is detected at runtime** (`detect_ovmf`), never hardcoded — Windows 11 requires UEFI + Secure Boot + TPM 2.0, and the `.secboot` filenames vary by distro.
+- **Guest clock is host-pushed, not NTP.** The firewall drops UDP 123, so the guest can never NTP-sync. Stage `35-timesync` installs `cowork-timesync.timer` on the HOST, which pushes host time in via qemu-ga (`virsh domtime ${VM_NAME} --time "$(date +%s)"`, boot + hourly). Use the explicit `--time` epoch form, NOT `virsh domtime --sync`: `--sync` needs w32time running AND silently no-ops here (the `<clock offset='localtime'>` interaction). The explicit `--time` form calls the guest's SetSystemTime directly and works **even with w32time stopped/disabled** (verified) — so the guest's Windows time sync can be turned fully OFF (cleaner: no failed time.windows.com attempts). Non-obvious: the timer is **host-side, so the golden ZFS snapshot does NOT contain it** — `install.sh`/`recover.sh` (both run stage 35) recreate it. In `gen_timesync_service` the `%%s` is deliberate (systemd needs `%%` for a literal `%`) and `\$(date …)` must stay escaped so the generator doesn't run it.
 - **Ubuntu/Debian only** (`apt`). No RHEL/dnf paths.
 
 ## Git / PR workflow

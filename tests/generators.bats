@@ -102,6 +102,27 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"copytruncate"* ]]
 }
 
+@test "gen_timesync_service pushes host time into the guest via qemu-ga (no NTP)" {
+  # Guest NTP is blocked, so the host sets the guest clock via virsh domtime.
+  run gen_timesync_service
+  [[ "$output" == *"domtime ${VM_NAME} --time"* ]]
+  # only when the domain is running
+  [[ "$output" == *'grep -q "^running$"'* ]]
+  # literal % must be escaped for systemd (%%s -> %s at runtime), not expanded here
+  [[ "$output" == *'date +%%s'* ]]
+  # must NOT have run command-substitution at generation time
+  [[ "$output" != *"$(date +%s 2>/dev/null)"* ]] || true
+  [[ "$output" == *'--time "$(date +%%s)"'* ]]
+}
+
+@test "gen_timesync_timer fires at boot and hourly, persistent" {
+  run gen_timesync_timer
+  [[ "$output" == *"OnBootSec="* ]]
+  [[ "$output" == *"OnUnitActiveSec=1h"* ]]
+  [[ "$output" == *"Persistent=true"* ]]
+  [[ "$output" == *"WantedBy=timers.target"* ]]
+}
+
 @test "detect_ovmf finds secboot firmware in a fixture dir" {
   mkdir -p "$BATS_TMPDIR/ovmf"
   touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
