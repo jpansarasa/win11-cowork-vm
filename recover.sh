@@ -17,7 +17,8 @@ load_config
 #   same host, disk intact:  zfs rollback ${ZFS_DATASET}@clean-authed
 #   new host / dead pool:     zfs recv ${ZFS_DATASET} < clean-authed.zfs  (from `zfs send`)
 # This script then rebuilds the host scaffolding and re-imports the domain; it
-# does NOT recreate the disk. recover_check_disk asserts the restore happened.
+# does NOT recreate the disk. recover_check_disk asserts the disk is PRESENT (the
+# restore's expected result) — it can't tell a fresh rollback from a stale disk.
 recover_check_disk() {
   [ -f "${DISK_PATH}" ] || die "restored disk not found at ${DISK_PATH} — zfs rollback/recv ${ZFS_DATASET:-the dataset} to @clean-authed before recovering"
 }
