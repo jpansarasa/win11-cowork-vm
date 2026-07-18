@@ -8,7 +8,7 @@ Two things that fit together:
 1. **`win11-cowork-vm-buildspec.md`** — the human-facing runbook: how to stand up an isolated Windows 11 guest on a Linux libvirt/KVM host to run Claude Cowork under revocable, MFA-gated sessions.
 2. **Bash "script collateral"** that automates the **Linux-host side** of that runbook so a rebuild is a rollback, not a re-derivation. This is now a real software project with `make lint` / `make test`.
 
-The scripts automate host scaffolding only. The Windows install, Cowork install, and all connector logins stay **manual** (James does them) — never assume you can drive the Windows OOBE or authenticate connectors.
+The scripts automate host scaffolding only. The Windows install, Cowork install, and all connector logins stay **manual** (James does them) — never assume you can drive the Windows OOBE or authenticate connectors. The one guest-side collateral is **`guest/postboot.ps1`** — an idempotent PowerShell helper **James** runs elevated *inside* the guest for the mechanical post-first-boot config (power, disable Windows Time, HCS features, timezone, curated Appx debloat). It is not host-driven, not in the bats suite (PowerShell, no shellcheck/mock), and deliberately excludes autologon (credential), Claude, and connectors. The authoritative guest checklist is buildspec §6 "Post-first-boot".
 
 ## Commands
 
