@@ -256,11 +256,23 @@ Attach with the console — **use SPICE/virt-viewer, not RDP** (RDP spawns its o
 # On the host itself:
 virt-viewer --connect qemu:///system win11-cowork
 
-# From a workstation — tunnels SPICE inside your existing SSH access, no new ports/rules:
+# From a LINUX client — native, or WSL2/WSLg on a Windows desktop. qemu+ssh
+# discovers the loopback SPICE port and tunnels it inside your existing SSH:
+# no manual `ssh -L`, no pinned port, no new firewall rules.
 virt-viewer --connect qemu+ssh://<you>@<host>/system win11-cowork
 ```
 
-**Console client (security):** run **distro-packaged `virt-viewer` on a Linux machine**, where its spice-gtk/GTK/GLib/GStreamer dependencies are current and CVE-patched. **Avoid the Windows MSI (11.0, 2021)** — its bundled parsing stack is frozen at 2021 and carries years of unpatched memory-safety CVEs in exactly the framebuffer/image-decode paths a display client exercises. Keep the SPICE console bound to the host's loopback (the default here) so it is reachable only through the SSH tunnel — nothing but your own qemu can feed the client.
+**Console client — use a Linux `virt-viewer` (incl. WSLg on Windows), never the native Windows MSI.** The newest *official* virt-viewer Windows MSI is **11.0 (2021-11-23)** — nothing newer exists. Two independent reasons to avoid it: (1) its spice-gtk/GTK/image-decode stack is frozen at 2021 with years of unpatched memory-safety CVEs in exactly the framebuffer paths a display client exercises; and (2) **it cannot connect over SSH at all** — libvirt's `unix`/`ssh`/`ext` transports are unsupported on Windows (`transport methods unix, ssh and ext are not supported under Windows`), the MSI ships only `libssh2` (which fails at the SSH banner against a modern OpenSSH host — `Failed sending banner`), and `tls`/`tcp` would require opening a new libvirtd port, which §3 forbids. So `?command=ssh` and friends are dead ends on native Windows. Run a **distro-packaged virt-viewer on Linux** instead: natively, or on a Windows desktop via **WSL2 + WSLg** (Windows 11 renders the Linux GUI automatically) —
+
+```bash
+# in WSL2 Ubuntu, one-time:
+sudo apt install -y virt-viewer
+cp /mnt/c/Users/<you>/.ssh/id_ed25519* ~/.ssh/ && chmod 600 ~/.ssh/id_ed25519   # reuse your key
+ssh <you>@<host> hostname        # confirms key auth + stores the host key (no password prompt)
+# then the qemu+ssh one-liner above works as designed.
+```
+
+Keep the SPICE console bound to the host's loopback (the default here) so it is reachable only through the SSH tunnel — nothing but your own qemu can feed the client.
 
 During setup:
 1. At disk selection, if no disk appears, **Load driver** → browse the virtio-win CD → `viostor\w11\amd64` (storage), then `NetKVM\w11\amd64` (network) if needed.
