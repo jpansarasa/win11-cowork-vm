@@ -154,11 +154,69 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "snapshot_vm creates an atomic disk-only snapshot" {
+@test "snapshot_vm freezes the guest, zfs-snapshots the dataset, then thaws (in order)" {
   MOCKLOG="$MOCKLOG" run bash -c \
     'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
   [ "$status" -eq 0 ]
-  grep -q "snapshot-create-as ${VM_NAME} clean-authed" "$MOCKLOG"
-  grep -q -- "--disk-only" "$MOCKLOG"
-  grep -q -- "--atomic" "$MOCKLOG"
+  grep -q "virsh domfsfreeze ${VM_NAME}" "$MOCKLOG"
+  grep -q "zfs snapshot ${ZFS_DATASET}@clean-authed" "$MOCKLOG"
+  grep -q "virsh domfsthaw ${VM_NAME}" "$MOCKLOG"
+  # freeze -> snapshot -> thaw ordering
+  freeze=$(grep -n "domfsfreeze" "$MOCKLOG" | cut -d: -f1)
+  snap=$(grep -n "zfs snapshot"  "$MOCKLOG" | cut -d: -f1)
+  thaw=$(grep -n "domfsthaw"   "$MOCKLOG" | cut -d: -f1)
+  [ "$freeze" -lt "$snap" ] && [ "$snap" -lt "$thaw" ]
+}
+
+@test "snapshot_vm thaws the guest even when the zfs snapshot fails (snapshot before thaw)" {
+  # A frozen-and-abandoned guest is worse than a missing snapshot. On failure we
+  # must still thaw, and the command must report failure (non-zero). The snapshot
+  # must also be ATTEMPTED before the thaw, or the freeze bought us nothing.
+  ZFS_FAIL=1 MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
+  [ "$status" -ne 0 ]
+  grep -q "virsh domfsthaw ${VM_NAME}" "$MOCKLOG"
+  snap=$(grep -n "zfs snapshot" "$MOCKLOG" | cut -d: -f1)
+  thaw=$(grep -n "domfsthaw"    "$MOCKLOG" | cut -d: -f1)
+  [ "$snap" -lt "$thaw" ]
+}
+
+@test "snapshot_vm still thaws and does NOT snapshot when the freeze fails" {
+  # A VSS timeout can leave filesystems frozen while domfsfreeze returns non-zero,
+  # so the thaw must run even on freeze failure; and no snapshot may be taken.
+  VIRSH_FREEZE_FAIL=1 MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
+  [ "$status" -ne 0 ]
+  grep -q "virsh domfsthaw ${VM_NAME}" "$MOCKLOG"
+  ! grep -q "zfs snapshot" "$MOCKLOG"
+}
+
+@test "snapshot_vm reports a frozen-guest emergency (loudly) when the thaw fails" {
+  VIRSH_THAW_FAIL=1 MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"FROZEN"* ]]
+}
+
+@test "snapshot_vm refuses to snapshot when the disk is not on the dataset" {
+  # If the dataset mounts somewhere other than where DISK_PATH lives, the golden
+  # snapshot would capture an empty dataset. Guard must abort before snapshotting.
+  ZFS_MOUNTPOINT=/somewhere/else MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
+  [ "$status" -ne 0 ]
+  ! grep -q "zfs snapshot" "$MOCKLOG"
+}
+
+@test "90-snapshot.sh exports the domain XML before taking the zfs snapshot" {
+  # The whole dataset-capture contract depends on the XML being written INTO the
+  # dataset before the snapshot freezes it. Run the real __main__ block to guard
+  # the ordering (not just the two functions in isolation).
+  dest="$BATS_TMPDIR/state"
+  run env PATH="${REPO_ROOT}/tests/mocks:$PATH" MOCKLOG="$MOCKLOG" \
+    DISK_PATH="$BATS_TMPDIR/win11.qcow2" ZFS_EXPORT_DIR="$dest" ZFS_MOUNTPOINT="$BATS_TMPDIR" \
+    bash scripts/90-snapshot.sh
+  [ "$status" -eq 0 ]
+  dump=$(grep -n "virsh dumpxml ${VM_NAME}" "$MOCKLOG" | head -1 | cut -d: -f1)
+  snap=$(grep -n "zfs snapshot" "$MOCKLOG" | cut -d: -f1)
+  [ -n "$dump" ] && [ -n "$snap" ] && [ "$dump" -lt "$snap" ]
 }

@@ -137,6 +137,8 @@ path=${WIN_ISO},device=cdrom,boot.order=1
 path=${VIRTIO_ISO},device=cdrom,boot.order=2
 --network
 network=${NET_NAME},model=virtio
+--channel
+unix,target.type=virtio,target.name=org.qemu.guest_agent.0
 --graphics
 spice
 --video

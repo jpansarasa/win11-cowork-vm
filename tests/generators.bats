@@ -114,6 +114,17 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"${VIRTIO_ISO}"* ]]
 }
 
+@test "virt_install_args wires the qemu-guest-agent channel (freeze/thaw for ZFS snapshots)" {
+  # The golden snapshot is VSS-quiesced via `virsh domfsfreeze`, which needs the
+  # guest agent. A fresh build must include the virtio-serial channel so the live
+  # box matches what 90-snapshot.sh assumes.
+  mkdir -p "$BATS_TMPDIR/ovmf"
+  touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
+  OVMF_DIR="$BATS_TMPDIR/ovmf" run virt_install_args
+  printf '%s\n' "$output" | grep -qx -- '--channel'
+  [[ "$output" == *"target.name=org.qemu.guest_agent.0"* ]]
+}
+
 @test "virt_install_args specifies an install method and a bootable order" {
   # Regression: virt-install rejects args with no install method
   # (--cdrom/--location/--pxe/--import/--boot <dev>). A firmware-only --boot
