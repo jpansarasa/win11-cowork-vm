@@ -312,6 +312,7 @@ Get-Service vmcompute, hns   # both Running  (vfpext loads on demand)
 - **Disable the lock screen timeout** so the console session doesn't lock out from under the app.
 - **Windows Update:** set active hours and "notify to restart" so it can't surprise-reboot mid-task. With autologon + app-at-startup, a reboot recovers on its own anyway.
 - **Launch Cowork at logon:** put a shortcut in `shell:startup`, or a Task Scheduler task "At log on of <user>" (not "at startup" — it must be in the interactive console session).
+- **Time sync — the guest can't use NTP.** The cowork firewall drops UDP 123, so Windows Time never reaches a server ("Last successful time synchronization: unspecified") and the clock free-runs/drifts. Don't punch an NTP hole; the **host pushes its NTP-correct time into the guest via qemu-guest-agent** (the `35-timesync` stage installs `cowork-timesync.timer` on the host — boot + hourly `virsh domtime … --time`). The one guest-side requirement: **set the Windows Time service to Automatic** (`sc config w32time start= auto`) — qemu-ga's `guest-set-time` only works while w32time is running, even though it can't reach a server. Leave the guest timezone correct; the host only sets UTC.
 
 ---
 

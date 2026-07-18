@@ -102,6 +102,40 @@ ${SNI_LOG} ${DNS_LOG} {
 EOF
 }
 
+# Guest time-sync: the guest can't reach NTP (UDP 123 is dropped by the cowork
+# firewall), so the HOST pushes its own (NTP-correct) time into the guest via
+# qemu-guest-agent. No egress hole, host stays the single time authority.
+# NOTE: this needs the Windows Time service (w32time) set to Automatic in the
+# guest — qemu-ga's guest-set-time only works while w32time is running.
+gen_timesync_service() {
+  cat <<EOF
+[Unit]
+Description=Push host time into the Cowork VM via qemu-guest-agent (guest NTP is blocked by design)
+After=libvirtd.service
+Wants=libvirtd.service
+
+[Service]
+Type=oneshot
+# Only when the domain is running; set guest UTC to the host's current UTC.
+ExecStart=/bin/sh -c 'virsh domstate ${VM_NAME} 2>/dev/null | grep -q "^running\$" && exec virsh domtime ${VM_NAME} --time "\$(date +%%s)" || true'
+EOF
+}
+
+gen_timesync_timer() {
+  cat <<EOF
+[Unit]
+Description=Periodically sync the Cowork VM clock from the host (guest NTP blocked)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
 # Ordered preference of Ubuntu/Debian secure-boot firmware code files.
 detect_ovmf() {
   local dir="${1:-/usr/share/OVMF}" code
