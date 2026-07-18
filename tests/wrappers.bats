@@ -154,11 +154,25 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "snapshot_vm creates an atomic disk-only snapshot" {
+@test "snapshot_vm freezes the guest, zfs-snapshots the dataset, then thaws (in order)" {
   MOCKLOG="$MOCKLOG" run bash -c \
     'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
   [ "$status" -eq 0 ]
-  grep -q "snapshot-create-as ${VM_NAME} clean-authed" "$MOCKLOG"
-  grep -q -- "--disk-only" "$MOCKLOG"
-  grep -q -- "--atomic" "$MOCKLOG"
+  grep -q "virsh domfsfreeze ${VM_NAME}" "$MOCKLOG"
+  grep -q "zfs snapshot ${ZFS_DATASET}@clean-authed" "$MOCKLOG"
+  grep -q "virsh domfsthaw ${VM_NAME}" "$MOCKLOG"
+  # freeze -> snapshot -> thaw ordering
+  freeze=$(grep -n "domfsfreeze" "$MOCKLOG" | cut -d: -f1)
+  snap=$(grep -n "zfs snapshot"  "$MOCKLOG" | cut -d: -f1)
+  thaw=$(grep -n "domfsthaw"   "$MOCKLOG" | cut -d: -f1)
+  [ "$freeze" -lt "$snap" ] && [ "$snap" -lt "$thaw" ]
+}
+
+@test "snapshot_vm thaws the guest even when the zfs snapshot fails" {
+  # A frozen-and-abandoned guest is worse than a missing snapshot. On failure we
+  # must still thaw, and the command must report failure (non-zero).
+  ZFS_FAIL=1 MOCKLOG="$MOCKLOG" run bash -c \
+    'source lib/common.sh; load_config; source scripts/90-snapshot.sh; snapshot_vm'
+  [ "$status" -ne 0 ]
+  grep -q "virsh domfsthaw ${VM_NAME}" "$MOCKLOG"
 }

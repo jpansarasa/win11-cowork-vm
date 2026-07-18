@@ -26,6 +26,11 @@ egrep -c '(vmx|svm)' /proc/cpuinfo          # >0 expected (Xeon E-2176G => vmx)
 # KVM modules loaded?
 lsmod | grep -E 'kvm_intel|kvm'
 ls -l /dev/kvm
+# NESTED virtualization must be on — Cowork's sandbox runs Windows HCS
+# (vmcompute/hns/vfpext) inside the guest, which needs Hyper-V in the guest.
+cat /sys/module/kvm_intel/parameters/nested    # Y expected (kvm_amd on AMD)
+# If N: echo "options kvm_intel nested=1" | sudo tee /etc/modprobe.d/kvm-nested.conf
+#       then reload kvm_intel (or reboot) and re-check.
 ```
 
 Install the stack (Debian/Ubuntu shown; RHEL-family equivalents in parentheses):
@@ -216,10 +221,11 @@ virt-install \
   --boot uefi \
   --features smm.state=on \
   --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb \
-  --disk path=/var/lib/libvirt/images/win11-cowork.qcow2,size=100,format=qcow2,bus=virtio \
+  --disk path=/export/coworkvm/win11-cowork.qcow2,size=100,format=qcow2,bus=virtio \
   --disk path=/var/lib/libvirt/images/Win11.iso,device=cdrom,boot.order=1 \
   --disk path=/var/lib/libvirt/images/virtio-win.iso,device=cdrom \
   --network network=cowork-net,model=virtio \
+  --channel unix,target.type=virtio,target.name=org.qemu.guest_agent.0 \
   --graphics spice \
   --video qxl \
   --controller type=usb,model=qemu-xhci \
@@ -231,6 +237,8 @@ Notes:
 - Older `virt-install` uses `--os-variant win11` instead of `--osinfo win11`.
 - If `--boot uefi` doesn't enable Secure Boot on this distro, set it explicitly with the `.secboot` firmware, e.g. `--boot loader=/usr/share/OVMF/OVMF_CODE.secboot.fd,loader.readonly=yes,loader.type=pflash,loader.secure=yes,nvram.template=/usr/share/OVMF/OVMF_VARS.fd` plus `--features smm.state=on`.
 - 16 GB / 4 vCPU is generous headroom on 32 GB free; drop to 12 GB if you want more host slack.
+- **Disk lives on a ZFS dataset** (`tank/coworkvm`, mounted `/export/coworkvm`), not the NVMe libvirt pool — so the golden baseline snapshots and the whole recovery story are ZFS (§9). The ISOs can stay in the libvirt pool.
+- **`--channel …guest_agent.0`** wires qemu-guest-agent. It's required, not cosmetic: `virsh domfsfreeze` (the VSS quiesce for an app-consistent snapshot in §9) only works through it. Install `virtio-win-guest-tools.exe` in the guest so the Windows side of the agent is running.
 
 ---
 
@@ -271,7 +279,16 @@ powercfg /hibernate off
 # Confirm TPM + Secure Boot took
 Get-Tpm                      # TpmPresent/TpmReady = True
 Confirm-SecureBootUEFI       # True
+
+# Cowork's sandbox is Windows HCS (vmcompute/hns/vfpext) — it needs the guest's
+# own virtualization stack. Enable it (reboot when prompted), then confirm.
+Enable-WindowsOptionalFeature -Online -All -NoRestart -FeatureName `
+  Microsoft-Hyper-V, Containers, VirtualMachinePlatform
+# after reboot:
+Get-Service vmcompute, hns   # both Running  (vfpext loads on demand)
 ```
+
+- **Nested virt is a hard dependency here:** if the host didn't enable `kvm_intel nested=1` (§1), these guest features install but the HCS services fail to start and Cowork reports `Missing hcs services: hns, vmcompute, vfpext`. Fix it on the host, not in the guest.
 
 - **Autologon (console session):** James is fine with this on the isolated box. Prefer **Sysinternals Autologon** (stores the credential via LSA rather than plaintext registry) over `netplwiz`. This makes reboots self-healing.
 - **Disable the lock screen timeout** so the console session doesn't lock out from under the app.
@@ -305,11 +322,24 @@ Checklist:
 - App launches automatically in the console session after a reboot.
 - Connectors authenticate; a test scheduled run produces **drafts/reports only**, no outbound actions.
 
-Then snapshot the clean, authed state:
+Then snapshot the clean, authed state — this is the **golden baseline** the whole
+"recovery is a rollback" design rests on. The disk and the exported domain XML both
+live on the `tank/coworkvm` dataset, so one ZFS snapshot captures them atomically.
+`scripts/90-snapshot.sh` does exactly this: export XML → VSS-quiesce → snapshot → thaw.
+
 ```bash
-virsh snapshot-create-as win11-cowork clean-authed "post-setup, connectors authed" --disk-only --atomic
-# (or full-system snapshot depending on pool/backing)
+sudo ./scripts/90-snapshot.sh
+# equivalently, by hand:
+#   virsh dumpxml win11-cowork > /export/coworkvm/state/win11-cowork.domain.xml
+#   virsh domfsfreeze win11-cowork          # VSS quiesce via qemu-ga -> "Froze N filesystem(s)"
+#   zfs snapshot tank/coworkvm@clean-authed
+#   virsh domfsthaw  win11-cowork
 ```
+
+Recovery (`recover.sh`) is the inverse: get the dataset back to the baseline first, then
+rebuild scaffolding + re-import the domain.
+- Same host, disk intact: `zfs rollback tank/coworkvm@clean-authed` (VM off).
+- Dead pool / new host: `zfs send` the snapshot offsite; restore with `zfs recv` before recovering.
 
 ---
 

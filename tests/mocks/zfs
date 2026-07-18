@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+echo "zfs $*" >> "${MOCKLOG:-/dev/null}"
+# ZFS_FAIL=1 makes `zfs snapshot` fail, to test that the guest is thawed anyway.
+[ "${ZFS_FAIL:-0}" = "1" ] && [ "$1" = "snapshot" ] && exit 1
+exit 0
