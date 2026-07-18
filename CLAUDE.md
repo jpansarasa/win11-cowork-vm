@@ -37,7 +37,7 @@ The design that makes bash testable: **separate pure generators from thin host-t
 
 ## Load-bearing constraints (do not violate)
 
-1. **No lateral movement.** The `inet cowork` nftables table has TWO base chains, both priority `-10`: a **`forward`** chain drops guest→`{10/8, 172.16/12, 192.168/16, 169.254/16}` (lateral to *other* LAN machines), and an **`input`** chain drops guest→the *host itself* except the host's DNS/DHCP. Both are required — see the INPUT-vs-FORWARD gotcha below. Only forwarded DNS + 80/443 egress is allowed. This is the highest-value control.
+1. **No lateral movement.** The `inet cowork` nftables table has TWO base chains, both priority `-10`: a **`forward`** chain drops guest→`{10/8, 172.16/12, 192.168/16, 169.254/16}` (lateral to *other* LAN machines), and an **`input`** chain drops guest→the *host itself* except the host's DNS/DHCP. Both are required — see the INPUT-vs-FORWARD gotcha below. Only forwarded DNS + 80/443 egress is allowed. Both chains also drop **all guest IPv6** (`meta nfproto ipv6`) as a first rule: the guest is IPv4-only, and the DNS/web accepts are address-family-agnostic, so without the v6 drop a v6-capable guest could reach a LAN/host v6 address on 443/53. This is the highest-value control.
 2. **Capability gate stays in software.** Unattended/scheduled Cowork runs produce **drafts and proposals only** — never irreversible actions without James present.
 3. **Thin client, not a vault.** No personal data, no imported browser profiles, no SSH keys to other hosts. Connector sessions are the only asset; revocable in seconds.
 4. **Disposable.** Snapshot the clean-authed state; recovery is a rollback.

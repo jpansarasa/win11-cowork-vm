@@ -11,6 +11,15 @@ table inet cowork {
 
     ct state established,related accept
 
+    # HARD BLOCK: all guest IPv6. The guest is IPv4-only by design, so drop every
+    # guest-originated v6 packet outright — no v6 lateral movement, no v6 exfil
+    # path, and no dependence on knowing the LAN's v6 prefix (a global-unicast
+    # neighbour wouldn't be covered by fc00::/7 anyway). Note the dport 80/443
+    # accepts below are address-family-agnostic: without this a v6-capable guest
+    # could reach a LAN host's v6 address on 443. If v6 egress is ever wanted,
+    # allow it explicitly here after observe-then-tighten.
+    iifname "${BRIDGE}" meta nfproto ipv6 counter drop
+
     # HARD BLOCK: guest -> private LAN (no lateral movement). Guest->resolver DNS is destined for the host's own bridge IP and is handled by the INPUT hook (libvirt's own rules), not this forward chain.
     iifname "${BRIDGE}" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } counter drop
 
@@ -31,6 +40,9 @@ table inet cowork {
     # not FORWARD, so the forward chain above never sees it. The guest may use
     # ONLY the host's dnsmasq (DNS + DHCP) on the bridge; every other host service
     # (SSH, Webmin, NFS/SMB/ZFS shares, docker, ...) is unreachable from the guest.
+    # Drop all guest IPv6 to the host first (v4-only guest — the DNS/DHCP accepts
+    # below are family-agnostic, so this keeps the guest off any host v6 service).
+    iifname "${BRIDGE}" meta nfproto ipv6 counter drop
     iifname "${BRIDGE}" udp dport { 53, 67 } accept
     iifname "${BRIDGE}" tcp dport 53 accept
     iifname "${BRIDGE}" counter drop

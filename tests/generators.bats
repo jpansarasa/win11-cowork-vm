@@ -49,6 +49,22 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [ "$(printf '%s\n' "$output" | grep -c "iifname \"${BRIDGE}\" counter drop")" -ge 2 ]
 }
 
+@test "gen_nft_rules drops ALL guest IPv6 in both chains (v4-only guest)" {
+  # Defense in depth: the guest is IPv4-only, so every guest v6 packet is dropped
+  # in both the forward (lateral) and input (host) chains. 2 nfproto-ipv6 drops.
+  run gen_nft_rules
+  [ "$(printf '%s\n' "$output" | grep -c "iifname \"${BRIDGE}\" meta nfproto ipv6 counter drop")" -ge 2 ]
+}
+
+@test "gen_nft_rules: the IPv6 drop precedes the family-agnostic web accepts" {
+  # The `tcp dport { 80, 443 } accept` is address-family-agnostic, so the v6 drop
+  # MUST come first or a v6-capable guest could reach a LAN/host v6 addr on 443.
+  gen_nft_rules > "$BATS_TMPDIR/r.nft"
+  v6=$(grep -n 'meta nfproto ipv6 counter drop' "$BATS_TMPDIR/r.nft" | head -1 | cut -d: -f1)
+  web=$(grep -n 'tcp dport { 80, 443 }' "$BATS_TMPDIR/r.nft" | cut -d: -f1)
+  [ "$v6" -lt "$web" ]
+}
+
 @test "gen_net_xml sets name, bridge, and NAT" {
   run gen_net_xml
   [[ "$output" == *"<name>${NET_NAME}</name>"* ]]
