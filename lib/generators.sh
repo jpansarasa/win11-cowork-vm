@@ -117,11 +117,11 @@ loader=${code},loader.readonly=yes,loader.type=pflash,loader.secure=yes,nvram.te
 --tpm
 backend.type=emulator,backend.version=2.0,model=tpm-crb
 --disk
-path=${DISK_PATH},size=${DISK_GB},format=qcow2,bus=virtio
+path=${DISK_PATH},size=${DISK_GB},format=qcow2,bus=virtio,boot.order=3
 --disk
 path=${WIN_ISO},device=cdrom,boot.order=1
 --disk
-path=${VIRTIO_ISO},device=cdrom
+path=${VIRTIO_ISO},device=cdrom,boot.order=2
 --network
 network=${NET_NAME},model=virtio
 --graphics
@@ -132,6 +132,7 @@ qxl
 type=usb,model=qemu-xhci
 --sound
 none
+--import
 --noautoconsole
 EOF
 }

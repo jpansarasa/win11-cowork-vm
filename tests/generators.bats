@@ -103,6 +103,20 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"${VIRTIO_ISO}"* ]]
 }
 
+@test "virt_install_args specifies an install method and a bootable order" {
+  # Regression: virt-install rejects args with no install method
+  # (--cdrom/--location/--pxe/--import/--boot <dev>). A firmware-only --boot
+  # loader=... is NOT an install method. Guard that one is always present.
+  mkdir -p "$BATS_TMPDIR/ovmf"
+  touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
+  OVMF_DIR="$BATS_TMPDIR/ovmf" run virt_install_args
+  # --import is emitted as its own token (own line)
+  printf '%s\n' "$output" | grep -qx -- '--import'
+  # the Win11 installer CD boots first, the OS disk is in the boot chain
+  [[ "$output" == *"path=${WIN_ISO},device=cdrom,boot.order=1"* ]]
+  [[ "$output" == *"format=qcow2,bus=virtio,boot.order=3"* ]]
+}
+
 @test "virt_install_args emits one token per line (flag and value never share an element)" {
   mkdir -p "$BATS_TMPDIR/ovmf"
   touch "$BATS_TMPDIR/ovmf/OVMF_CODE_4M.secboot.fd" "$BATS_TMPDIR/ovmf/OVMF_VARS_4M.fd"
