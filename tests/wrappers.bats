@@ -26,11 +26,17 @@ setup() {
   grep -q "virsh net-autostart" "$MOCKLOG"
 }
 
-@test "apply_network refreshes (no define-clobber error) when present" {
+@test "apply_network rebuilds cleanly when present (undefine BEFORE define, no uuid clobber)" {
+  # Regression (found by the real recover.sh E2E test): net-define on an existing
+  # network name errors "already exists with uuid ..." — recovery MUST net-undefine
+  # the old network before redefining. The exit-0 mocks hid this; assert the order.
   VIRSH_NET_EXISTS=1 run bash -c \
     'source lib/common.sh; source lib/generators.sh; source scripts/10-network.sh; apply_network'
   [ "$status" -eq 0 ]
-  grep -q "virsh net-destroy" "$MOCKLOG"
+  grep -q "virsh net-undefine ${NET_NAME}" "$MOCKLOG"
+  undef=$(grep -n "net-undefine" "$MOCKLOG" | head -1 | cut -d: -f1)
+  def=$(grep -n "net-define"   "$MOCKLOG" | tail -1 | cut -d: -f1)
+  [ "$undef" -lt "$def" ]
 }
 
 @test "ensure_include is idempotent" {
