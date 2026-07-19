@@ -361,6 +361,53 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 - Scope connectors minimally (draft/label over full-send where the option exists; read-only Drive if write isn't required). Drive is optional given the ZFS store — skip it if not needed.
 - MFA on every account. Note that these sessions are the only asset on the box and are revocable in seconds from outside if anything looks off.
 
+### Reaching the operator remotely (ntfy — outbound only)
+
+When Cowork needs the operator while they're away, it sends a **one-way** ntfy
+notification (optionally with a file attachment) straight from the guest over its
+existing 443 egress. This is the natural complement to the capability gate:
+unattended runs can't *act* irreversibly, but they *can* say "I'm blocked" or
+"here's a draft."
+
+**Hard rule — outbound only.** The guest publishes; it **never subscribes**. A
+subscribe path would be a command channel *into* the guest. `guest/notify.ps1`
+has no read/poll path; keep it that way.
+
+**One-time setup:**
+1. In ntfy, pick a **hard-to-guess topic** (e.g. `cowork-7f3a…`) and create a
+   **publish-only access token** scoped to just that topic (ntfy: *Account →
+   Access tokens*, then a topic ACL granting write-only). This token is the one
+   sanctioned secret in the guest (buildspec principle #1 exception): publish-only,
+   single-topic, revocable in seconds.
+2. In the guest, write `%ProgramData%\cowork\ntfy.json` (see
+   `guest/ntfy.json.example`) with the topic URL + token. Lock it down:
+   ```powershell
+   New-Item -ItemType Directory -Force -Path "$env:ProgramData\cowork" | Out-Null
+   # paste url+token into $env:ProgramData\cowork\ntfy.json, then restrict to admins+SYSTEM:
+   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r /grant:r "Administrators:R" "SYSTEM:R"
+   ```
+3. Subscribe to the topic on your phone (ntfy app) and send a test:
+   ```powershell
+   .\notify.ps1 -Title 'test' -Message 'hello from the guest'
+   ```
+
+**Wiring Cowork to it (documented command).** Cowork invokes the helper through its
+normal command execution — no MCP, no extension API. Give Cowork a standing
+instruction, e.g.:
+
+> To notify the operator, run:
+> `powershell -ExecutionPolicy Bypass -File C:\path\to\notify.ps1 -Title "<short>" -Message "<detail>" [-Priority high] [-File "<path>"]`
+> Use it when blocked awaiting approval, or to hand over a finished draft (`-File`).
+> Never attempt to read or subscribe to ntfy — this channel is outbound only.
+
+**Residual risk (documented, not hidden):** a prompt-injected Cowork could use the
+notification body/attachment as an exfil channel — but the guest already has full
+443 egress, so this adds convenience, not a new capability. Bounded by: publish-only
+scope, a hard-to-guess topic, and instant token revocation.
+
+> This is the *remote* channel. Local, attended file moves use the SPICE shared
+> folder — see §5a.
+
 ---
 
 ## 9. Verify, then snapshot
