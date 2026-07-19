@@ -108,7 +108,9 @@ sudo apt install -y virt-viewer
 
 # 2. Get a key into WSL — either reuse the workstation's existing key (any type,
 #    RSA included), or generate a fresh one just for the console.
-cp /mnt/c/Users/<you>/.ssh/id_* ~/.ssh/ && chmod 600 ~/.ssh/id_*
+mkdir -p ~/.ssh && chmod 700 ~/.ssh          # dir MUST have the x bit (see note below)
+cp /mnt/c/Users/<you>/.ssh/id_* ~/.ssh/
+chmod 600 ~/.ssh/id_* && chmod 644 ~/.ssh/id_*.pub
 #    or:  ssh-keygen -t ed25519 -C cowork-console && ssh-copy-id ${HOST_ADDR}
 
 # 3. Prove key auth works AND cache the host key — must be prompt-free:
@@ -123,6 +125,18 @@ there is nowhere to type a password or accept a host key. If step 3 prompts for
 anything, step 4 fails opaquely. Run `ssh-copy-id ${HOST_ADDR}` first if the key
 isn't on the host yet, and repeat step 3 until it prints the hostname with no
 prompts.
+
+**Permissions are the usual failure, and they mislead.** Files copied off `/mnt/c`
+inherit DrvFs `755`, and `~/.ssh` itself can end up without its execute bit. Both
+faults present as the *same* confusing pair of symptoms: `Permission denied` on
+`known_hosts`, plus a surprise **password prompt** — because ssh silently couldn't
+read the private key to offer it, and fell back to password auth. Don't chase the
+key or the host; check the modes first:
+
+```bash
+ls -ld ~/.ssh          # want drwx------  (no x = can't traverse = nothing inside is readable)
+ls -l  ~/.ssh/id_*     # want -rw-------  (ssh refuses a private key that is group/world readable)
+```
 
 **RSA keys work fine.** OpenSSH 8.8+ disabled only the legacy SHA-1 `ssh-rsa`
 signature; a modern host still accepts the same RSA key via `rsa-sha2-256/512`.
