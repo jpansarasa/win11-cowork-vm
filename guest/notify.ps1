@@ -84,5 +84,6 @@ catch {
       $body = $sr.ReadToEnd()
     } catch {}
   }
+  if (-not $body) { $body = $_.Exception.Message }
   throw "ntfy notify FAILED (HTTP $status): $body"
 }
