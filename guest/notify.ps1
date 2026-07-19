@@ -49,7 +49,7 @@ $headers = @{
   'Title'         = (Flatten $Title)
   'Priority'      = $Priority
 }
-if ($Tags) { $headers['Tags'] = ($Tags -join ',') }
+if ($Tags) { $headers['Tags'] = (Flatten ($Tags -join ',')) }
 
 $usePut = [bool]$File
 if ($usePut) {

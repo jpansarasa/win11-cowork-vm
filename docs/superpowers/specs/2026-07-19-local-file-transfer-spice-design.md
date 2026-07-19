@@ -60,7 +60,7 @@ Client workstation
 
 ## Error handling & gotchas
 
-- **`spice-webdavd` missing** → the guest shows no client folder. `postboot.ps1` surfaces this explicitly rather than silently no-op'ing; the buildspec names the installer that provides it.
+- **`spice-webdavd` missing** → the guest shows no client folder. `postboot.ps1` self-heals this: it downloads the signed MSI, verifies the Authenticode signature, and installs — failing loud (never silently no-op'ing) if the download or signature check fails.
 - **`WebClient` stopped** → the drive won't map even with `spice-webdavd` running. Both are ensured in `postboot.ps1` and called out in the buildspec.
 - **WSLg path confusion** → sharing a WSL `$HOME` path hides Windows files; the doc steers to `/mnt/c/...`.
 - **Share silently gone** → expected when `virt-viewer` is closed; documented as the intended self-gating behavior, not a bug.
