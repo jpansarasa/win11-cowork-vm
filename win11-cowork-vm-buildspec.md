@@ -281,6 +281,42 @@ During setup:
 
 Post-first-boot, install guest tools from the virtio-win CD: run `virtio-win-guest-tools.exe` (balloon, qemu-ga, NIC).
 
+### 5a. File transfer — SPICE shared folder (local, both directions)
+
+Move files between a local machine and the guest over the **same** SPICE-over-SSH
+console tunnel — no firewall change, no extra ports. The share is live **only while
+`virt-viewer` is connected**, so it never widens the unattended attack surface.
+
+**Guest side:** handled by `guest/postboot.ps1` — it ensures `spice-webdavd` and the
+`WebClient` redirector are installed and running. Confirm once:
+
+```powershell
+Get-Service spice-webdavd, WebClient   # both Running
+```
+
+**Client side (the machine running `virt-viewer`):** pick a folder to share.
+
+- In `virt-viewer`: **Preferences → Share folder** → tick *Share folder*, choose the folder.
+- Reconnect the console. In the guest, the folder appears as the **"Spice client folder"**
+  drive (a WebDAV mount under `\\localhost@…`/a mapped drive).
+
+**WSLg caveat (Windows client via WSL2):** `virt-viewer` runs inside WSL, so the shared
+folder is a **WSL-side path**. To share Windows files, point it at the Windows mount,
+e.g. `/mnt/c/Users/<user>/Downloads`, or copy files into WSL first. (`/mnt/c` is a bit
+slow for very large files — for those, copy into the WSL home first.)
+
+**Move a file:**
+- *Into the guest:* drop it in the shared folder → open the "Spice client folder" drive in the guest → copy it out.
+- *Out of the guest:* write/copy it into that drive in the guest → it appears in the shared folder on the client.
+
+**Gotchas:**
+- No "Spice client folder" drive? Check `Get-Service spice-webdavd, WebClient` are both
+  Running (re-run `postboot.ps1`), and that the `virt-viewer` shared-folder box is ticked.
+- The drive vanishing when you close `virt-viewer` is **expected** — the share is attended-only.
+
+> Remote hand-off (when you're away from the console) is a different channel — see
+> "Reaching the operator remotely" (ntfy). SPICE is the local, attended path only.
+
 ---
 
 ## 6. Post-first-boot configuration (24/7 unattended hosting)
