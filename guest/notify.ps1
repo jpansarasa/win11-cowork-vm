@@ -28,6 +28,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $ConfigPath = Join-Path $env:ProgramData 'cowork\ntfy.json'
 
+# HTTP header values cannot contain CR/LF - flatten anything that becomes a header.
+function Flatten([string]$s) { ($s -replace "`r`n|`r|`n", ' ').Trim() }
+
 function Get-NtfyConfig([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) {
     throw "ntfy config not found at $Path. Create it: { `"url`": `"https://<ntfy-host>/<topic>`", `"token`": `"tk_...`" } (publish-only token)."
@@ -43,7 +46,7 @@ $cfg = Get-NtfyConfig $ConfigPath
 
 $headers = @{
   'Authorization' = "Bearer $($cfg.token)"
-  'Title'         = $Title
+  'Title'         = (Flatten $Title)
   'Priority'      = $Priority
 }
 if ($Tags) { $headers['Tags'] = ($Tags -join ',') }
@@ -53,7 +56,7 @@ if ($usePut) {
   if (-not (Test-Path -LiteralPath $File)) { throw "Attachment not found: $File" }
   $headers['Filename'] = [System.IO.Path]::GetFileName($File)
   # With an attachment the body IS the file, so the text rides in the Message header.
-  $headers['Message']  = $Message
+  $headers['Message']  = (Flatten $Message)
 }
 
 if ($DryRun) {
@@ -70,7 +73,7 @@ try {
   if ($usePut) {
     $resp = Invoke-RestMethod -Uri $cfg.url -Method Put -Headers $headers -InFile $File -ContentType 'application/octet-stream'
   } else {
-    $resp = Invoke-RestMethod -Uri $cfg.url -Method Post -Headers $headers -Body $Message
+    $resp = Invoke-RestMethod -Uri $cfg.url -Method Post -Headers $headers -Body $Message -ContentType 'text/plain; charset=utf-8'
   }
   Write-Host "ntfy: delivered (id $($resp.id))"
 }

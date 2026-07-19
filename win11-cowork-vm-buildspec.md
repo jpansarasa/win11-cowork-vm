@@ -315,7 +315,7 @@ slow for very large files — for those, copy into the WSL home first.)
 - The drive vanishing when you close `virt-viewer` is **expected** — the share is attended-only.
 
 > Remote hand-off (when you're away from the console) is a different channel — see
-> "Reaching the operator remotely" (ntfy). SPICE is the local, attended path only.
+> §8a "Reaching the operator remotely" (ntfy). SPICE is the local, attended path only.
 
 ---
 
@@ -325,7 +325,7 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 
 **Checklist (in order):**
 1. **Guest tools** — install `virtio-win-guest-tools.exe` from the virtio-win CD (qemu-ga + SPICE + NIC/balloon). **qemu-ga is load-bearing**: host snapshots (`domfsfreeze`) and time-sync (`domtime`) go through it.
-2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), and a curated **debloat**.
+2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), a curated **debloat**, and ensures `spice-webdavd` + `WebClient` (downloading the signed MSI from spice-space.org if absent).
 3. **Confirm firmware:** `Get-Tpm` (TpmReady = True), `Confirm-SecureBootUEFI` (True). After the later reboot, `Get-Service vmcompute, hns` should both be Running (vfpext loads on demand).
 4. **Autologon** — **Sysinternals Autologon** (stores the credential via LSA, not plaintext registry; sidesteps the hidden `netplwiz` checkbox on Win11 local accounts). Makes reboots self-healing. *[manual — credential]*
 5. **Claude** — install from **https://claude.com/download**, sign in, enable Cowork, then Advanced options → *Runs at log-in* = **On** and *Let this app run in background* = **Always** (see the launch-at-logon note below). *[manual — auth]*
@@ -361,7 +361,7 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 - Scope connectors minimally (draft/label over full-send where the option exists; read-only Drive if write isn't required). Drive is optional given the ZFS store — skip it if not needed.
 - MFA on every account. Note that these sessions are the only asset on the box and are revocable in seconds from outside if anything looks off.
 
-### Reaching the operator remotely (ntfy — outbound only)
+### 8a. Reaching the operator remotely (ntfy — outbound only)
 
 When Cowork needs the operator while they're away, it sends a **one-way** ntfy
 notification (optionally with a file attachment) straight from the guest over its
@@ -384,11 +384,16 @@ has no read/poll path; keep it that way.
    ```powershell
    New-Item -ItemType Directory -Force -Path "$env:ProgramData\cowork" | Out-Null
    # paste url+token into $env:ProgramData\cowork\ntfy.json, then restrict to admins+SYSTEM:
-   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r /grant:r "Administrators:R" "SYSTEM:R"
+   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r /grant:r "$env:USERNAME:R" "BUILTIN\Administrators:R" "SYSTEM:R"
    ```
-3. Subscribe to the topic on your phone (ntfy app) and send a test:
+   The grant **must name the account Cowork actually runs as** (the autologon user) —
+   Cowork invokes the helper non-elevated, so an Administrators-only ACL will silently
+   deny it.
+3. Copy `guest/notify.ps1` into `C:\cowork\` in the guest (the §5a SPICE share is the
+   easy way to get it there). Subscribe to the topic on your phone (ntfy app) and send
+   a test:
    ```powershell
-   .\notify.ps1 -Title 'test' -Message 'hello from the guest'
+   C:\cowork\notify.ps1 -Title 'test' -Message 'hello from the guest'
    ```
 
 **Wiring Cowork to it (documented command).** Cowork invokes the helper through its
@@ -396,7 +401,7 @@ normal command execution — no MCP, no extension API. Give Cowork a standing
 instruction, e.g.:
 
 > To notify the operator, run:
-> `powershell -ExecutionPolicy Bypass -File C:\path\to\notify.ps1 -Title "<short>" -Message "<detail>" [-Priority high] [-File "<path>"]`
+> `powershell -ExecutionPolicy Bypass -File C:\cowork\notify.ps1 -Title "<short>" -Message "<detail>" [-Priority high] [-File "<path>"]`
 > Use it when blocked awaiting approval, or to hand over a finished draft (`-File`).
 > Never attempt to read or subscribe to ntfy — this channel is outbound only.
 

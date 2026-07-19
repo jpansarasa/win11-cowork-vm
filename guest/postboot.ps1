@@ -127,7 +127,8 @@ Do-Step 'spice-webdavd: ensure installed + running (host<->guest file share)' {
     }
     Note "  MSI signed by: $($sig.SignerCertificate.Subject)"
     $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
-    if ($p.ExitCode -ne 0) { throw "spice-webdavd install failed (msiexec exit $($p.ExitCode))." }
+    if ($p.ExitCode -notin 0, 3010, 1641) { throw "spice-webdavd install failed (msiexec exit $($p.ExitCode))." }
+    if ($p.ExitCode -ne 0) { Note "  installer reports reboot required (msiexec $($p.ExitCode))" }
     Remove-Item -LiteralPath $msi -ErrorAction SilentlyContinue
     $svc = Get-Service -Name 'spice-webdavd' -ErrorAction SilentlyContinue
     if (-not $svc) { throw 'spice-webdavd still absent after install.' }

@@ -49,7 +49,7 @@ Client workstation
 ## Components
 
 1. **Guest — `spice-webdavd` present + running.** Part of the Windows SPICE guest tools. `spice-vdagent` is almost certainly already installed (clipboard works), and `spice-webdavd` often ships alongside it. **Step 0 is *verify*, install only if missing.** This is mechanical guest config, so it fits `guest/postboot.ps1`'s charter: add an idempotent check-then-ensure block that
-   - checks whether the `spice-webdavd` service exists; if absent, logs a clear "install SPICE guest tools" instruction (the MSI/installer is not something postboot downloads — consistent with how postboot avoids fetching installers),
+   - checks whether the `spice-webdavd` service exists; if absent, **auto-downloads the signed `spice-webdavd` MSI from spice-space.org**, verifies its Authenticode signature is `Valid` before installing, and refuses to install otherwise — a deliberate operator decision to let postboot self-heal this dependency rather than only logging an instruction,
    - if present, ensures the service is enabled + running (`Set-Service -StartupType Automatic`, `Start-Service`),
    - and ensures the **`WebClient`** service is running + auto-start (Windows needs it to map the WebDAV drive).
    The block is idempotent and safe to re-run, matching every other `postboot.ps1` action.
@@ -75,3 +75,5 @@ Client workstation
 ## Security posture (one line)
 
 No protocol on the LAN, no credentials, no standing channel, no server to patch, alive only while the operator is at the console. This is the whole reason it beats SMB for the stated use case.
+
+**Caveat.** Pinning `WebClient` (the WebDAV redirector) to Automatic+Running is a real, if small, posture change: it's the classic NTLM-coercion primitive, and `postboot.ps1` keeps it Automatic so the drive maps reliably, which keeps the WebDAV redirector live at all times, not just while `virt-viewer` is connected. The cage bounds the blast radius — LAN and host targets are unreachable — so the residual is an NTLM-over-HTTP leak to an internet host, and only from an already-compromised guest on a disposable local account.
