@@ -7,3 +7,8 @@
 
 # Subagent-driven-development scratch
 .superpowers/
+
+# ntfy publish-only token config — the REAL file lives in the guest at
+# %ProgramData%\cowork\ntfy.json and must never be committed. Ship only the example.
+ntfy.json
+!ntfy.json.example

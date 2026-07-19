@@ -1,0 +1,4 @@
+{
+  "url": "https://ntfy.example.net/cowork-REPLACE-with-a-hard-to-guess-topic",
+  "token": "tk_REPLACE_with_a_PUBLISH_ONLY_token_scoped_to_this_one_topic"
+}
