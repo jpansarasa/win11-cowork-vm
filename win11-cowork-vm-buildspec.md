@@ -1,7 +1,7 @@
 # Build Spec — Isolated Win11 VM to Host Claude Cowork (libvirt/KVM)
 
 **For:** Claude Code running on the Linux KVM host.
-**Operator:** James (does the interactive Windows install, sign-ins, and all connector logins himself).
+**Operator:** the human operator (does the interactive Windows install, sign-ins, and all connector logins themselves).
 **Goal:** Stand up a purpose-built, segmented Windows 11 guest whose only value is revocable, MFA-gated sessions — no lateral path to the rest of the network, no imported profiles, least-privilege egress.
 
 ---
@@ -10,7 +10,7 @@
 
 1. **The VM is a thin client, not a vault.** No personal data, no copied browser profiles, no SSH keys to other hosts. Everything of value (ZFS, other lab hosts) stays unreachable from it.
 2. **No lateral movement.** The guest must not be able to reach RFC1918 LAN hosts — only the internet endpoints it needs. This is the load-bearing network control.
-3. **The capability gate stays in software.** Network isolation caps crude paths; it does not harden the agent's judgment. Keep the standing rule that unattended/scheduled runs produce drafts and proposals only — never outbound/irreversible actions without James present to approve.
+3. **The capability gate stays in software.** Network isolation caps crude paths; it does not harden the agent's judgment. Keep the standing rule that unattended/scheduled runs produce drafts and proposals only — never outbound/irreversible actions without the operator present to approve.
 4. **Least privilege on connectors.** Log into only what's needed, minimum scopes, MFA everywhere.
 5. **Disposable.** Snapshot after a clean auth so re-auth/corruption is a rollback, not a rebuild.
 
@@ -130,7 +130,7 @@ sudo nft -f /etc/nftables.d/cowork.nft
 
 ### 3c. Optional — true domain allowlist (egress proxy)
 
-L3/L4 rules can't reliably allowlist by hostname (CDN IPs churn). If James wants real domain control (the "diode" on egress), stand up an explicit-allow forward proxy and point the guest at it, then drop direct 80/443 in 3b:
+L3/L4 rules can't reliably allowlist by hostname (CDN IPs churn). If real domain control is needed (the "diode" on egress), stand up an explicit-allow forward proxy and point the guest at it, then drop direct 80/443 in 3b:
 
 ```bash
 # Squid sketch (host or a tiny sidecar):
@@ -248,7 +248,7 @@ Notes:
 
 ---
 
-## 5. Windows install (James, interactive)
+## 5. Windows install (operator, interactive)
 
 Attach with the console — **use SPICE/virt-viewer, not RDP** (RDP spawns its own session and detaches the console session the app and scheduled tasks must live in):
 
@@ -302,7 +302,7 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 
 - **Nested virt is a hard dependency here:** if the host didn't enable `kvm_intel nested=1` (§1), the HCS features install but the services fail to start and Cowork reports `Missing hcs services: hns, vmcompute, vfpext`. Fix it on the host, not in the guest.
 
-- **Autologon (console session):** James is fine with this on the isolated box. Prefer **Sysinternals Autologon** (stores the credential via LSA rather than plaintext registry) over `netplwiz`. This makes reboots self-healing.
+- **Autologon (console session):** acceptable on the isolated box. Prefer **Sysinternals Autologon** (stores the credential via LSA rather than plaintext registry) over `netplwiz`. This makes reboots self-healing.
 - **Disable the lock screen timeout** so the console session doesn't lock out from under the app.
 - **Windows Update:** set active hours and "notify to restart" so it can't surprise-reboot mid-task. With autologon + app-at-startup, a reboot recovers on its own anyway.
 - **Launch Cowork at logon:** use Claude's **own "Runs at log-in" toggle** — Settings → Apps → Installed apps → **Claude** → Advanced options → *Runs at log-in* → **On** (and set *Let this app run in background* = **Always**). It registers a per-user logon **startup task**: it fires in the interactive console session (what Cowork needs — a *service* wouldn't be in the session SPICE shows) and survives app updates (unlike a shortcut pinned to a version-stamped `claude.exe`). Fallbacks only if that toggle is ever missing: a shortcut in `shell:startup`, or a Task Scheduler task "At log on of <user>" — **never** "at startup" or "run whether the user is logged on or not", which detach from the console session.
@@ -313,13 +313,13 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 ## 7. Install Claude Cowork
 
 1. In the guest browser, download the Claude desktop app from the **official** page only: **https://claude.com/download** (Windows). Do not fetch from third parties.
-2. Install, launch, sign in with James's account.
+2. Install, launch, sign in with the operator's account.
 3. Enable/enter **Cowork** (research preview inside the desktop app) — see the getting-started article in Sources. Confirm the account has access to the Cowork preview.
 4. If using browser control (Claude in Chrome), install the Chrome extension in the guest's browser — a fresh profile, not an import.
 
 ---
 
-## 8. Connector logins (James, least privilege)
+## 8. Connector logins (operator, least privilege)
 
 - Log into **only** the services actually needed (e.g., Google for Gmail/Drive/Calendar). Start from a clean browser profile — **do not copy or import** the desktop Chrome profile.
 - Scope connectors minimally (draft/label over full-send where the option exists; read-only Drive if write isn't required). Drive is optional given the ZFS store — skip it if not needed.
@@ -358,8 +358,8 @@ rebuild scaffolding + re-import the domain.
 
 ## 10. Open items to verify (don't assume)
 
-- **Cowork preview availability** on James's account/plan — confirm in the app; the desktop app installs regardless but the Cowork feature may be gated.
-- **Exact egress endpoint list** for the app + connectors — I did not hardcode hostnames beyond the obvious (`anthropic.com`, `claude.com`, `claude.ai`, Google, Microsoft). Run the VM for a day with §3b permissive on 443, capture destinations (`conntrack`, Squid logs, or `nft` counters + a passive DNS log), then tighten §3c to the observed set.
+- **Cowork preview availability** on the operator's account/plan — confirm in the app; the desktop app installs regardless but the Cowork feature may be gated.
+- **Exact egress endpoint list** for the app + connectors — hostnames aren't hardcoded beyond the obvious (`anthropic.com`, `claude.com`, `claude.ai`, Google, Microsoft). Run the VM for a day with §3b permissive on 443, capture destinations (`conntrack`, Squid logs, or `nft` counters + a passive DNS log), then tighten §3c to the observed set.
 - **Whether connectors broker server-side** (through claude.ai) vs. call out directly from the guest — this changes how much egress the guest itself needs. Observe before locking down hard, or you'll break connectors and chase ghosts.
 - **Firmware paths / virt-install flag dialects** vary by distro version — Claude Code should confirm on the actual host rather than trust the exact strings above.
 
