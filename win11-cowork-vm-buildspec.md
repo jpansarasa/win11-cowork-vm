@@ -1,7 +1,7 @@
 # Build Spec — Isolated Win11 VM to Host Claude Cowork (libvirt/KVM)
 
 **For:** Claude Code running on the Linux KVM host.
-**Operator:** James (does the interactive Windows install, sign-ins, and all connector logins himself).
+**Operator:** the human operator (does the interactive Windows install, sign-ins, and all connector logins themselves).
 **Goal:** Stand up a purpose-built, segmented Windows 11 guest whose only value is revocable, MFA-gated sessions — no lateral path to the rest of the network, no imported profiles, least-privilege egress.
 
 ---
@@ -10,7 +10,7 @@
 
 1. **The VM is a thin client, not a vault.** No personal data, no copied browser profiles, no SSH keys to other hosts. Everything of value (ZFS, other lab hosts) stays unreachable from it.
 2. **No lateral movement.** The guest must not be able to reach RFC1918 LAN hosts — only the internet endpoints it needs. This is the load-bearing network control.
-3. **The capability gate stays in software.** Network isolation caps crude paths; it does not harden the agent's judgment. Keep the standing rule that unattended/scheduled runs produce drafts and proposals only — never outbound/irreversible actions without James present to approve.
+3. **The capability gate stays in software.** Network isolation caps crude paths; it does not harden the agent's judgment. Keep the standing rule that unattended/scheduled runs produce drafts and proposals only — never outbound/irreversible actions without the operator present to approve.
 4. **Least privilege on connectors.** Log into only what's needed, minimum scopes, MFA everywhere.
 5. **Disposable.** Snapshot after a clean auth so re-auth/corruption is a rollback, not a rebuild.
 
@@ -130,7 +130,7 @@ sudo nft -f /etc/nftables.d/cowork.nft
 
 ### 3c. Optional — true domain allowlist (egress proxy)
 
-L3/L4 rules can't reliably allowlist by hostname (CDN IPs churn). If James wants real domain control (the "diode" on egress), stand up an explicit-allow forward proxy and point the guest at it, then drop direct 80/443 in 3b:
+L3/L4 rules can't reliably allowlist by hostname (CDN IPs churn). If real domain control is needed (the "diode" on egress), stand up an explicit-allow forward proxy and point the guest at it, then drop direct 80/443 in 3b:
 
 ```bash
 # Squid sketch (host or a tiny sidecar):
@@ -248,7 +248,7 @@ Notes:
 
 ---
 
-## 5. Windows install (James, interactive)
+## 5. Windows install (operator, interactive)
 
 Attach with the console — **use SPICE/virt-viewer, not RDP** (RDP spawns its own session and detaches the console session the app and scheduled tasks must live in):
 
@@ -282,6 +282,42 @@ During setup:
 
 Post-first-boot, install guest tools from the virtio-win CD: run `virtio-win-guest-tools.exe` (balloon, qemu-ga, NIC).
 
+### 5a. File transfer — SPICE shared folder (local, both directions)
+
+Move files between a local machine and the guest over the **same** SPICE-over-SSH
+console tunnel — no firewall change, no extra ports. The share is live **only while
+`virt-viewer` is connected**, so it never widens the unattended attack surface.
+
+**Guest side:** handled by `guest/postboot.ps1` — it ensures `spice-webdavd` and the
+`WebClient` redirector are installed and running. Confirm once:
+
+```powershell
+Get-Service spice-webdavd, WebClient   # both Running
+```
+
+**Client side (the machine running `virt-viewer`):** pick a folder to share.
+
+- In `virt-viewer`: **Preferences → Share folder** → tick *Share folder*, choose the folder.
+- Reconnect the console. In the guest, the folder appears as the **"Spice client folder"**
+  drive (a WebDAV mount under `\\localhost@…`/a mapped drive).
+
+**WSLg caveat (Windows client via WSL2):** `virt-viewer` runs inside WSL, so the shared
+folder is a **WSL-side path**. To share Windows files, point it at the Windows mount,
+e.g. `/mnt/c/Users/<user>/Downloads`, or copy files into WSL first. (`/mnt/c` is a bit
+slow for very large files — for those, copy into the WSL home first.)
+
+**Move a file:**
+- *Into the guest:* drop it in the shared folder → open the "Spice client folder" drive in the guest → copy it out.
+- *Out of the guest:* write/copy it into that drive in the guest → it appears in the shared folder on the client.
+
+**Gotchas:**
+- No "Spice client folder" drive? Check `Get-Service spice-webdavd, WebClient` are both
+  Running (re-run `postboot.ps1`), and that the `virt-viewer` shared-folder box is ticked.
+- The drive vanishing when you close `virt-viewer` is **expected** — the share is attended-only.
+
+> Remote hand-off (when you're away from the console) is a different channel — see
+> §8a "Reaching the operator remotely" (ntfy). SPICE is the local, attended path only.
+
 ---
 
 ## 6. Post-first-boot configuration (24/7 unattended hosting)
@@ -290,7 +326,7 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 
 **Checklist (in order):**
 1. **Guest tools** — install `virtio-win-guest-tools.exe` from the virtio-win CD (qemu-ga + SPICE + NIC/balloon). **qemu-ga is load-bearing**: host snapshots (`domfsfreeze`) and time-sync (`domtime`) go through it.
-2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), and a curated **debloat**.
+2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), a curated **debloat**, and ensures `spice-webdavd` + `WebClient` (downloading the signed MSI from spice-space.org if absent).
 3. **Confirm firmware:** `Get-Tpm` (TpmReady = True), `Confirm-SecureBootUEFI` (True). After the later reboot, `Get-Service vmcompute, hns` should both be Running (vfpext loads on demand).
 4. **Autologon** — **Sysinternals Autologon** (stores the credential via LSA, not plaintext registry; sidesteps the hidden `netplwiz` checkbox on Win11 local accounts). Makes reboots self-healing. *[manual — credential]*
 5. **Claude** — install from **https://claude.com/download**, sign in, enable Cowork, then Advanced options → *Runs at log-in* = **On** and *Let this app run in background* = **Always** (see the launch-at-logon note below). *[manual — auth]*
@@ -303,7 +339,7 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 
 - **Nested virt is a hard dependency here:** if the host didn't enable `kvm_intel nested=1` (§1), the HCS features install but the services fail to start and Cowork reports `Missing hcs services: hns, vmcompute, vfpext`. Fix it on the host, not in the guest.
 
-- **Autologon (console session):** James is fine with this on the isolated box. Prefer **Sysinternals Autologon** (stores the credential via LSA rather than plaintext registry) over `netplwiz`. This makes reboots self-healing.
+- **Autologon (console session):** acceptable on the isolated box. Prefer **Sysinternals Autologon** (stores the credential via LSA rather than plaintext registry) over `netplwiz`. This makes reboots self-healing.
 - **Disable the lock screen timeout** so the console session doesn't lock out from under the app.
 - **Windows Update:** set active hours and "notify to restart" so it can't surprise-reboot mid-task. With autologon + app-at-startup, a reboot recovers on its own anyway.
 - **Launch Cowork at logon:** use Claude's **own "Runs at log-in" toggle** — Settings → Apps → Installed apps → **Claude** → Advanced options → *Runs at log-in* → **On** (and set *Let this app run in background* = **Always**). It registers a per-user logon **startup task**: it fires in the interactive console session (what Cowork needs — a *service* wouldn't be in the session SPICE shows) and survives app updates (unlike a shortcut pinned to a version-stamped `claude.exe`). Fallbacks only if that toggle is ever missing: a shortcut in `shell:startup`, or a Task Scheduler task "At log on of <user>" — **never** "at startup" or "run whether the user is logged on or not", which detach from the console session.
@@ -314,17 +350,69 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 ## 7. Install Claude Cowork
 
 1. In the guest browser, download the Claude desktop app from the **official** page only: **https://claude.com/download** (Windows). Do not fetch from third parties.
-2. Install, launch, sign in with James's account.
+2. Install, launch, sign in with the operator's account.
 3. Enable/enter **Cowork** (research preview inside the desktop app) — see the getting-started article in Sources. Confirm the account has access to the Cowork preview.
 4. If using browser control (Claude in Chrome), install the Chrome extension in the guest's browser — a fresh profile, not an import.
 
 ---
 
-## 8. Connector logins (James, least privilege)
+## 8. Connector logins (operator, least privilege)
 
 - Log into **only** the services actually needed (e.g., Google for Gmail/Drive/Calendar). Start from a clean browser profile — **do not copy or import** the desktop Chrome profile.
 - Scope connectors minimally (draft/label over full-send where the option exists; read-only Drive if write isn't required). Drive is optional given the ZFS store — skip it if not needed.
 - MFA on every account. Note that these sessions are the only asset on the box and are revocable in seconds from outside if anything looks off.
+
+### 8a. Reaching the operator remotely (ntfy — outbound only)
+
+When Cowork needs the operator while they're away, it sends a **one-way** ntfy
+notification (optionally with a file attachment) straight from the guest over its
+existing 443 egress. This is the natural complement to the capability gate:
+unattended runs can't *act* irreversibly, but they *can* say "I'm blocked" or
+"here's a draft."
+
+**Hard rule — outbound only.** The guest publishes; it **never subscribes**. A
+subscribe path would be a command channel *into* the guest. `guest/notify.ps1`
+has no read/poll path; keep it that way.
+
+**One-time setup:**
+1. In ntfy, pick a **hard-to-guess topic** (e.g. `cowork-7f3a…`) and create a
+   **publish-only access token** scoped to just that topic (ntfy: *Account →
+   Access tokens*, then a topic ACL granting write-only). This token is the one
+   sanctioned secret in the guest (buildspec principle #1 exception): publish-only,
+   single-topic, revocable in seconds.
+2. In the guest, write `%ProgramData%\cowork\ntfy.json` (see
+   `guest/ntfy.json.example`) with the topic URL + token. Lock it down:
+   ```powershell
+   New-Item -ItemType Directory -Force -Path "$env:ProgramData\cowork" | Out-Null
+   # paste url+token into $env:ProgramData\cowork\ntfy.json, then restrict to admins+SYSTEM:
+   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r /grant:r "$env:USERNAME:R" "BUILTIN\Administrators:R" "SYSTEM:R"
+   ```
+   The grant **must name the account Cowork actually runs as** (the autologon user) —
+   Cowork invokes the helper non-elevated, so an Administrators-only ACL will silently
+   deny it.
+3. Copy `guest/notify.ps1` into `C:\cowork\` in the guest (the §5a SPICE share is the
+   easy way to get it there). Subscribe to the topic on your phone (ntfy app) and send
+   a test:
+   ```powershell
+   C:\cowork\notify.ps1 -Title 'test' -Message 'hello from the guest'
+   ```
+
+**Wiring Cowork to it (documented command).** Cowork invokes the helper through its
+normal command execution — no MCP, no extension API. Give Cowork a standing
+instruction, e.g.:
+
+> To notify the operator, run:
+> `powershell -ExecutionPolicy Bypass -File C:\cowork\notify.ps1 -Title "<short>" -Message "<detail>" [-Priority high] [-File "<path>"]`
+> Use it when blocked awaiting approval, or to hand over a finished draft (`-File`).
+> Never attempt to read or subscribe to ntfy — this channel is outbound only.
+
+**Residual risk (documented, not hidden):** a prompt-injected Cowork could use the
+notification body/attachment as an exfil channel — but the guest already has full
+443 egress, so this adds convenience, not a new capability. Bounded by: publish-only
+scope, a hard-to-guess topic, and instant token revocation.
+
+> This is the *remote* channel. Local, attended file moves use the SPICE shared
+> folder — see §5a.
 
 ---
 
@@ -359,8 +447,8 @@ rebuild scaffolding + re-import the domain.
 
 ## 10. Open items to verify (don't assume)
 
-- **Cowork preview availability** on James's account/plan — confirm in the app; the desktop app installs regardless but the Cowork feature may be gated.
-- **Exact egress endpoint list** for the app + connectors — I did not hardcode hostnames beyond the obvious (`anthropic.com`, `claude.com`, `claude.ai`, Google, Microsoft). Run the VM for a day with §3b permissive on 443, capture destinations (`conntrack`, Squid logs, or `nft` counters + a passive DNS log), then tighten §3c to the observed set.
+- **Cowork preview availability** on the operator's account/plan — confirm in the app; the desktop app installs regardless but the Cowork feature may be gated.
+- **Exact egress endpoint list** for the app + connectors — hostnames aren't hardcoded beyond the obvious (`anthropic.com`, `claude.com`, `claude.ai`, Google, Microsoft). Run the VM for a day with §3b permissive on 443, capture destinations (`conntrack`, Squid logs, or `nft` counters + a passive DNS log), then tighten §3c to the observed set.
 - **Whether connectors broker server-side** (through claude.ai) vs. call out directly from the guest — this changes how much egress the guest itself needs. Observe before locking down hard, or you'll break connectors and chase ghosts.
 - **Firmware paths / virt-install flag dialects** vary by distro version — Claude Code should confirm on the actual host rather than trust the exact strings above.
 

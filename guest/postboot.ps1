@@ -4,7 +4,7 @@
   postboot.ps1 - mechanical post-first-boot config for the Cowork Windows guest.
 
   Run ONCE in an ELEVATED PowerShell inside the guest. Idempotent - safe to re-run.
-  James runs this by hand; Claude/host never drives it. It covers only the
+  The operator runs this by hand; Claude/host never drives it. It covers only the
   non-interactive, mechanical bits so a rebuild isn't a full re-derivation.
 
   It deliberately does NOT do (these stay manual - see buildspec "Post-first-boot"):
@@ -107,6 +107,38 @@ foreach ($pat in $RemovePatterns) {
         try { Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction Stop | Out-Null } catch { }
       }
   }
+}
+
+# 8) SPICE WebDAV - enables host<->guest file transfer via virt-viewer "Share folder".
+#    Auto-installs the SIGNED spice-webdavd MSI if absent (verified before install),
+#    then ensures it + the WebClient (WebDAV redirector) run so the guest can map the
+#    "Spice client folder" as a drive. Attended-only: the share is live only while a
+#    virt-viewer console with a shared folder is connected.
+Do-Step 'spice-webdavd: ensure installed + running (host<->guest file share)' {
+  $svc = Get-Service -Name 'spice-webdavd' -ErrorAction SilentlyContinue
+  if (-not $svc) {
+    Note '  spice-webdavd absent; downloading signed MSI from spice-space.org'
+    $url = 'https://www.spice-space.org/download/windows/spice-webdavd/spice-webdavd-x64-latest.msi'
+    $msi = Join-Path $env:TEMP 'spice-webdavd-x64.msi'
+    Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
+    $sig = Get-AuthenticodeSignature -FilePath $msi
+    if ($sig.Status -ne 'Valid') {
+      throw "spice-webdavd MSI signature not Valid (status: $($sig.Status)); refusing to install."
+    }
+    Note "  MSI signed by: $($sig.SignerCertificate.Subject)"
+    $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
+    if ($p.ExitCode -notin 0, 3010, 1641) { throw "spice-webdavd install failed (msiexec exit $($p.ExitCode))." }
+    if ($p.ExitCode -ne 0) { Note "  installer reports reboot required (msiexec $($p.ExitCode))" }
+    Remove-Item -LiteralPath $msi -ErrorAction SilentlyContinue
+    $svc = Get-Service -Name 'spice-webdavd' -ErrorAction SilentlyContinue
+    if (-not $svc) { throw 'spice-webdavd still absent after install.' }
+    Note '  installed spice-webdavd'
+  }
+  Set-Service -Name 'spice-webdavd' -StartupType Automatic
+  if ((Get-Service spice-webdavd).Status -ne 'Running') { Start-Service spice-webdavd }
+  # WebClient = the WebDAV redirector; without it the Spice client folder won't map.
+  Set-Service -Name 'WebClient' -StartupType Automatic
+  if ((Get-Service WebClient).Status -ne 'Running') { Start-Service WebClient }
 }
 
 Note ''
