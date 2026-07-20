@@ -267,7 +267,8 @@ virt-viewer --connect qemu+ssh://<you>@<host>/system win11-cowork
 ```bash
 # in WSL2 Ubuntu, one-time:
 sudo apt install -y virt-viewer
-cp /mnt/c/Users/<you>/.ssh/id_ed25519* ~/.ssh/ && chmod 600 ~/.ssh/id_ed25519   # reuse your key
+mkdir -p ~/.ssh && chmod 700 ~/.ssh                      # dir needs its x bit or ssh reads nothing inside
+cp /mnt/c/Users/<you>/.ssh/id_* ~/.ssh/ && chmod 600 ~/.ssh/id_*   # /mnt/c copies land 755; ssh refuses keys that open
 ssh <you>@<host> hostname        # confirms key auth + stores the host key (no password prompt)
 # then the qemu+ssh one-liner above works as designed.
 ```

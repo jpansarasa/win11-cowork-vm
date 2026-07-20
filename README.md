@@ -99,6 +99,61 @@ unsupported on Windows). So from a Windows desktop, run the console inside **WSL
 WSLg**, where the `qemu+ssh://` command above works as designed. SPICE stays bound
 to the host's loopback and is reached only through the SSH tunnel.
 
+<details>
+<summary><strong>One-time console setup on a new workstation (WSL2 + WSLg)</strong></summary>
+
+```bash
+# 1. In WSL2 (Ubuntu):
+sudo apt install -y virt-viewer
+
+# 2. Get a key into WSL — either reuse the workstation's existing key (any type,
+#    RSA included), or generate a fresh one just for the console.
+mkdir -p ~/.ssh && chmod 700 ~/.ssh          # dir MUST have the x bit (see note below)
+cp /mnt/c/Users/<you>/.ssh/id_* ~/.ssh/
+chmod 600 ~/.ssh/id_* && chmod 644 ~/.ssh/id_*.pub
+#    or:  ssh-keygen -t ed25519 -C cowork-console && ssh-copy-id ${HOST_ADDR}
+
+# 3. Prove key auth works AND cache the host key — must be prompt-free:
+ssh ${HOST_ADDR} hostname
+
+# 4. Connect:
+virt-viewer --connect qemu+ssh://${HOST_ADDR}/system win11-cowork
+```
+
+**Step 3 is the one that bites.** `virt-viewer` spawns `ssh` non-interactively —
+there is nowhere to type a password or accept a host key. If step 3 prompts for
+anything, step 4 fails opaquely. Run `ssh-copy-id ${HOST_ADDR}` first if the key
+isn't on the host yet, and repeat step 3 until it prints the hostname with no
+prompts.
+
+**Permissions are the usual failure, and they mislead.** Files copied off `/mnt/c`
+inherit DrvFs `755`, and `~/.ssh` itself can end up without its execute bit. Both
+faults present as the *same* confusing pair of symptoms: `Permission denied` on
+`known_hosts`, plus a surprise **password prompt** — because ssh silently couldn't
+read the private key to offer it, and fell back to password auth. Don't chase the
+key or the host; check the modes first:
+
+```bash
+ls -ld ~/.ssh          # want drwx------  (no x = can't traverse = nothing inside is readable)
+ls -l  ~/.ssh/id_*     # want -rw-------  (ssh refuses a private key that is group/world readable)
+```
+
+**RSA keys work fine.** OpenSSH 8.8+ disabled only the legacy SHA-1 `ssh-rsa`
+signature; a modern host still accepts the same RSA key via `rsa-sha2-256/512`.
+If step 3 fails with *no mutually supported signature algorithms*, either generate
+an ed25519 key (cleanest) or add for that host in `~/.ssh/config`:
+
+```
+Host <host>
+    PubkeyAcceptedAlgorithms +ssh-rsa
+    HostkeyAlgorithms +ssh-rsa
+```
+
+On Windows 11, WSLg needs no X server or `DISPLAY` setup — the GUI just renders.
+If no window appears, run `wsl --update` from Windows.
+
+</details>
+
 The guest lives on a host-internal NAT network; it is never visible on the LAN.
 
 Egress visibility is always-on: dnsmasq query logging plus a persistent
