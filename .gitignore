@@ -12,3 +12,7 @@
 # %ProgramData%\cowork\ntfy.json and must never be committed. Ship only the example.
 ntfy.json
 !ntfy.json.example
+
+# Site-specific config overrides (WAN IPs, internal hostnames). Sourced after
+# config.env by load_config. Never commit — keeps a public clone leak-free.
+config.local.env
