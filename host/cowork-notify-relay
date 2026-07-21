@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""cowork-notify-relay — publish the guest's queued notifications to ntfy.
+
+The guest cannot reach ntfy (the cage drops guest→LAN, by design) and holds no
+credential. Instead it writes request files into a spool directory; this runs on
+the HOST, drains that spool over the qemu-guest-agent channel, and publishes from
+here — where ntfy has always been reachable.
+
+Consequences worth stating:
+  * the publish-only token lives on the host, never in the disposable guest
+  * nothing is pinned to a WAN address, so a dynamic IP is irrelevant
+  * no firewall, DNS, or router change is required anywhere
+
+Config comes from /etc/cowork/notify-relay.env (written by scripts/37-notify-relay.sh).
+"""
+
+import base64
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+CONF = os.environ.get("RELAY_ENV", "/etc/cowork/notify-relay.env")
+
+
+def load_conf(path):
+    conf = {}
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip().strip('"').strip("'")
+    except FileNotFoundError:
+        die("config not found: %s" % path)
+    for required in ("VM_NAME", "NTFY_URL", "NTFY_TOKEN_FILE", "OUTBOX"):
+        if not conf.get(required):
+            die("%s is missing %s" % (path, required))
+    return conf
+
+
+def die(msg, code=1):
+    print("cowork-notify-relay: %s" % msg, file=sys.stderr)
+    sys.exit(code)
+
+
+# --- guest-agent plumbing ----------------------------------------------------
+
+def ga(vm, payload):
+    """One qemu-agent-command round-trip."""
+    p = subprocess.run(
+        ["virsh", "qemu-agent-command", vm, json.dumps(payload)],
+        capture_output=True, text=True,
+    )
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout).strip())
+    return json.loads(p.stdout)["return"]
+
+
+def run_ps(vm, cmd, timeout=120):
+    """Run PowerShell in the guest, return (exitcode, stdout, stderr)."""
+    started = ga(vm, {
+        "execute": "guest-exec",
+        "arguments": {
+            "path": "powershell.exe",
+            "arg": ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                    "-Command", cmd],
+            "capture-output": True,
+        },
+    })
+    pid = started["pid"]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = ga(vm, {"execute": "guest-exec-status", "arguments": {"pid": pid}})
+        if st.get("exited"):
+            out = base64.b64decode(st.get("out-data", "") or "").decode("utf-8", "replace")
+            err = base64.b64decode(st.get("err-data", "") or "").decode("utf-8", "replace")
+            return st.get("exitcode"), out, err
+        time.sleep(0.5)
+    raise RuntimeError("guest command timed out after %ss" % timeout)
+
+
+def guest_running(vm):
+    p = subprocess.run(["virsh", "domstate", vm], capture_output=True, text=True)
+    return p.returncode == 0 and p.stdout.strip() == "running"
+
+
+# --- ntfy --------------------------------------------------------------------
+
+def hdr_safe(s):
+    """Make a string safe as an HTTP header value.
+
+    Two separate constraints, and violating either raises rather than degrading:
+    CR/LF is illegal outright, and Python's http.client rejects non-Latin-1. ntfy
+    decodes RFC 2047, which is its documented answer for non-ASCII headers.
+    """
+    s = " ".join(str(s).split())
+    if any(ord(c) < 0x20 or ord(c) > 0x7E for c in s):
+        return "=?UTF-8?B?" + base64.b64encode(s.encode("utf-8")).decode("ascii") + "?="
+    return s
+
+
+def publish(url, token, req):
+    headers = {"Authorization": "Bearer " + token}
+    if req.get("title"):
+        headers["Title"] = hdr_safe(req["title"])
+    if req.get("priority"):
+        headers["Priority"] = str(req["priority"])
+    tags = [t for t in (req.get("tags") or []) if t]
+    if tags:
+        # Tags are matched by name, so encoding them would break matching — strip.
+        headers["Tags"] = "".join(
+            c for c in ",".join(str(t) for t in tags) if 0x20 <= ord(c) <= 0x7E)
+
+    if req.get("file_b64"):
+        body = base64.b64decode(req["file_b64"])
+        headers["Filename"] = hdr_safe(req.get("filename") or "attachment")
+        headers["Message"] = hdr_safe(req.get("message") or "")
+        headers["Content-Type"] = "application/octet-stream"
+        method = "PUT"
+    else:
+        body = (req.get("message") or "").encode("utf-8")
+        headers["Content-Type"] = "text/plain; charset=utf-8"
+        method = "POST"
+
+    rq = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(rq, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace")).get("id", "?")
+
+
+# --- main --------------------------------------------------------------------
+
+def main():
+    conf = load_conf(CONF)
+    vm, outbox = conf["VM_NAME"], conf["OUTBOX"]
+
+    if not guest_running(vm):
+        return 0  # nothing to do; not an error
+
+    try:
+        token = open(conf["NTFY_TOKEN_FILE"]).read().strip()
+    except OSError as e:
+        die("cannot read token file %s: %s" % (conf["NTFY_TOKEN_FILE"], e))
+    if not token:
+        die("token file %s is empty" % conf["NTFY_TOKEN_FILE"])
+
+    # Only *.json is listed: the guest writes .tmp then renames, so a file that
+    # appears here is complete.
+    code, out, err = run_ps(vm, (
+        "$p='%s'; if (Test-Path $p) { Get-ChildItem -Path $p -Filter *.json -File "
+        "| Sort-Object Name | Select-Object -ExpandProperty Name }" % outbox))
+    if code != 0:
+        die("listing the guest outbox failed: %s" % (err.strip() or out.strip()))
+
+    names = [n.strip() for n in out.splitlines() if n.strip()]
+    if not names:
+        return 0
+
+    failures = 0
+    for name in names:
+        full = outbox + "\\" + name
+        # Read as base64, NOT as text: guest-exec captures PowerShell's stdout in
+        # the console codepage, so any non-ASCII in the request (an accented
+        # title) is mangled in transit and the JSON no longer parses. Base64 is
+        # ASCII-safe end to end; whitespace is stripped in case stdout wrapped it.
+        code, out, err = run_ps(
+            vm, "[Convert]::ToBase64String([IO.File]::ReadAllBytes('%s'))" % full)
+        if code != 0:
+            print("skip %s: unreadable in guest: %s" % (name, err.strip()), file=sys.stderr)
+            failures += 1
+            continue
+        try:
+            req = json.loads(base64.b64decode("".join(out.split())).decode("utf-8"))
+        except (ValueError, TypeError) as e:
+            # Malformed requests would otherwise be retried forever; park them.
+            print("quarantining %s: bad JSON: %s" % (name, e), file=sys.stderr)
+            run_ps(vm, "Rename-Item -LiteralPath '%s' -NewName '%s.bad'" % (full, name))
+            failures += 1
+            continue
+
+        try:
+            msg_id = publish(conf["NTFY_URL"], token, req)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:200]
+            print("publish failed for %s: HTTP %s: %s" % (name, e.code, detail), file=sys.stderr)
+            failures += 1
+            continue  # leave it queued; next run retries
+        except Exception as e:
+            print("publish failed for %s: %s" % (name, e), file=sys.stderr)
+            failures += 1
+            continue
+
+        # Only delete after ntfy has accepted it — a crash here re-sends rather
+        # than silently dropping the operator's notification.
+        run_ps(vm, "Remove-Item -LiteralPath '%s' -Force" % full)
+        print("relayed %s -> ntfy id %s" % (name, msg_id))
+
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

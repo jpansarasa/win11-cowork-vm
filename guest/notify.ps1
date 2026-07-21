@@ -1,19 +1,20 @@
 #Requires -Version 5.1
 <#
-  notify.ps1 - one-way Cowork -> operator notification via ntfy.
+  notify.ps1 - queue a notification for the operator.
 
-  OUTBOUND ONLY. This helper never subscribes and never reads from ntfy; it only
-  PUBLISHES to a single topic with a publish-only token. Do NOT add a subscribe/poll
-  path - that would create a command channel INTO the guest.
+  The guest holds NO credential and makes NO network call. It writes a request
+  file into a spool directory; the HOST drains that spool over qemu-guest-agent
+  and publishes to ntfy from there, where ntfy is reachable. The guest cannot
+  reach ntfy (the cage drops guest->LAN by design) and does not need to.
 
-  Config (operator-created, NOT in the repo):
-    %ProgramData%\cowork\ntfy.json
-    { "url": "https://<ntfy-host>/<topic>", "token": "tk_publishonly" }
+  Deliberately one-way: the guest queues outbound notifications and has no way to
+  read anything back. Do NOT add a fetch/poll path - that would be a command
+  channel INTO the guest.
 
   Usage:
     .\notify.ps1 -Title 'Blocked' -Message 'Need approval on step 3'
-    .\notify.ps1 -Title 'Draft ready' -Message 'Review attached' -File C:\out\draft.pdf
-    .\notify.ps1 -Title t -Message m -DryRun     # print the request, send nothing
+    .\notify.ps1 -Title 'Draft ready' -Message 'Review attached' -File C:\out\draft.txt
+    .\notify.ps1 -Title t -Message m -DryRun     # show the request, queue nothing
 #>
 [CmdletBinding()]
 param(
@@ -26,67 +27,54 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ConfigPath = Join-Path $env:ProgramData 'cowork\ntfy.json'
+$Outbox = Join-Path $env:ProgramData 'cowork\outbox'
 
-# HTTP header values cannot contain CR/LF - flatten anything that becomes a header.
-function Flatten([string]$s) { ($s -replace "`r`n|`r|`n", ' ').Trim() }
+# Attachments ride inline (base64) through the agent channel, which is not a bulk
+# transport. Keep them small; the SPICE shared folder exists for real file moves.
+$MaxAttachmentBytes = 2MB
 
-function Get-NtfyConfig([string]$Path) {
-  if (-not (Test-Path -LiteralPath $Path)) {
-    throw "ntfy config not found at $Path. Create it: { `"url`": `"https://<ntfy-host>/<topic>`", `"token`": `"tk_...`" } (publish-only token)."
-  }
-  $cfg = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-  foreach ($k in 'url', 'token') {
-    if (-not $cfg.$k) { throw "ntfy config $Path is missing '$k'." }
-  }
-  return $cfg
+$req = [ordered]@{
+  title    = $Title
+  message  = $Message
+  priority = $Priority
+  tags     = @($Tags | Where-Object { $_ })
+  created  = (Get-Date).ToUniversalTime().ToString('o')
 }
 
-$cfg = Get-NtfyConfig $ConfigPath
-
-$headers = @{
-  'Authorization' = "Bearer $($cfg.token)"
-  'Title'         = (Flatten $Title)
-  'Priority'      = $Priority
-}
-if ($Tags) { $headers['Tags'] = (Flatten ($Tags -join ',')) }
-
-$usePut = [bool]$File
-if ($usePut) {
+$fi = $null
+if ($File) {
   if (-not (Test-Path -LiteralPath $File)) { throw "Attachment not found: $File" }
-  $headers['Filename'] = [System.IO.Path]::GetFileName($File)
-  # With an attachment the body IS the file, so the text rides in the Message header.
-  $headers['Message']  = (Flatten $Message)
+  $fi = Get-Item -LiteralPath $File
+  if ($fi.Length -gt $MaxAttachmentBytes) {
+    throw ("Attachment is {0:N0} bytes; the relay limit is {1:N0}. Move large files with the SPICE shared folder (buildspec 5a) instead." -f $fi.Length, $MaxAttachmentBytes)
+  }
+  $req.filename = $fi.Name
+  $req.file_b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($fi.FullName))
 }
 
 if ($DryRun) {
-  Write-Host "DRY RUN - no request sent"
-  Write-Host ("  {0} {1}" -f $(if ($usePut) { 'PUT' } else { 'POST' }), $cfg.url)
-  $shown = $headers.Clone()
-  $shown['Authorization'] = 'Bearer <redacted>'
-  $shown.GetEnumerator() | Sort-Object Name | ForEach-Object { Write-Host ("  {0}: {1}" -f $_.Name, $_.Value) }
-  if ($usePut) { Write-Host "  <body: file $File>" } else { Write-Host "  <body: $Message>" }
+  Write-Host 'DRY RUN - nothing queued'
+  if ($fi) {
+    $shown = [ordered]@{}
+    foreach ($k in $req.Keys) { if ($k -ne 'file_b64') { $shown[$k] = $req[$k] } }
+    Write-Host ($shown | ConvertTo-Json -Depth 4 -Compress)
+    Write-Host ("  <attachment {0}: {1:N0} bytes>" -f $req.filename, $fi.Length)
+  } else {
+    Write-Host ($req | ConvertTo-Json -Depth 4 -Compress)
+  }
   return
 }
 
-try {
-  if ($usePut) {
-    $resp = Invoke-RestMethod -Uri $cfg.url -Method Put -Headers $headers -InFile $File -ContentType 'application/octet-stream'
-  } else {
-    $resp = Invoke-RestMethod -Uri $cfg.url -Method Post -Headers $headers -Body $Message -ContentType 'text/plain; charset=utf-8'
-  }
-  Write-Host "ntfy: delivered (id $($resp.id))"
-}
-catch {
-  $status = $null
-  if ($_.Exception.Response) { try { $status = [int]$_.Exception.Response.StatusCode } catch {} }
-  $body = $_.ErrorDetails.Message
-  if (-not $body -and $_.Exception.Response) {
-    try {
-      $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-      $body = $sr.ReadToEnd()
-    } catch {}
-  }
-  if (-not $body) { $body = $_.Exception.Message }
-  throw "ntfy notify FAILED (HTTP $status): $body"
-}
+New-Item -ItemType Directory -Force -Path $Outbox | Out-Null
+
+# Write .tmp then rename: the host lists only *.json, so it can never read a
+# half-written request.
+$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmssfff')
+$base  = '{0}-{1}' -f $stamp, ([guid]::NewGuid().ToString('N').Substring(0, 8))
+$tmp   = Join-Path $Outbox ($base + '.tmp')
+$final = Join-Path $Outbox ($base + '.json')
+
+[IO.File]::WriteAllText($tmp, ($req | ConvertTo-Json -Depth 4 -Compress), (New-Object Text.UTF8Encoding($false)))
+Move-Item -LiteralPath $tmp -Destination $final
+
+Write-Host "queued: $final"

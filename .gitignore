@@ -8,7 +8,11 @@
 # Subagent-driven-development scratch
 .superpowers/
 
-# ntfy publish-only token config — the REAL file lives in the guest at
-# %ProgramData%\cowork\ntfy.json and must never be committed. Ship only the example.
+# ntfy publish-only token. The real token lives on the HOST at
+# /etc/cowork/ntfy.token (root-only) — never in the repo, never in the guest.
+ntfy.token
 ntfy.json
-!ntfy.json.example
+
+# Site-specific config overrides (topic URLs, hostnames). Sourced after
+# config.env by load_config. Never commit — keeps a public clone leak-free.
+config.local.env

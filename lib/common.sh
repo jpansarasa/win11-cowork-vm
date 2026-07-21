@@ -11,4 +11,12 @@ require_root() { [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"; }
 confirm() { local a; read -r -p "$1 [y/N] " a; [ "$a" = "y" ] || [ "$a" = "Y" ]; }
 cpu_has_virt() { printf '%s' "$1" | grep -Eq '(vmx|svm)'; }
 
-load_config() { source "${REPO_ROOT}/config.env"; }
+# config.env is tracked and holds portable defaults. Site-specific values (a
+# topic URL, a hostname) belong in config.local.env, which is gitignored — so a
+# public clone can never leak them. Sourced second, so it wins.
+load_config() {
+  source "${REPO_ROOT}/config.env"
+  if [ -f "${REPO_ROOT}/config.local.env" ]; then
+    source "${REPO_ROOT}/config.local.env"
+  fi
+}
