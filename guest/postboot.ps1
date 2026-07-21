@@ -109,36 +109,39 @@ foreach ($pat in $RemovePatterns) {
   }
 }
 
-# 8) SPICE WebDAV - enables host<->guest file transfer via virt-viewer "Share folder".
-#    Auto-installs the SIGNED spice-webdavd MSI if absent (verified before install),
-#    then ensures it + the WebClient (WebDAV redirector) run so the guest can map the
-#    "Spice client folder" as a drive. Attended-only: the share is live only while a
-#    virt-viewer console with a shared folder is connected.
-Do-Step 'spice-webdavd: ensure installed + running (host<->guest file share)' {
-  $svc = Get-Service -Name 'spice-webdavd' -ErrorAction SilentlyContinue
-  if (-not $svc) {
-    Note '  spice-webdavd absent; downloading signed MSI from spice-space.org'
-    $url = 'https://www.spice-space.org/download/windows/spice-webdavd/spice-webdavd-x64-latest.msi'
-    $msi = Join-Path $env:TEMP 'spice-webdavd-x64.msi'
-    Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
-    $sig = Get-AuthenticodeSignature -FilePath $msi
-    if ($sig.Status -ne 'Valid') {
-      throw "spice-webdavd MSI signature not Valid (status: $($sig.Status)); refusing to install."
-    }
-    Note "  MSI signed by: $($sig.SignerCertificate.Subject)"
-    $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList '/i', "`"$msi`"", '/qn', '/norestart'
-    if ($p.ExitCode -notin 0, 3010, 1641) { throw "spice-webdavd install failed (msiexec exit $($p.ExitCode))." }
-    if ($p.ExitCode -ne 0) { Note "  installer reports reboot required (msiexec $($p.ExitCode))" }
-    Remove-Item -LiteralPath $msi -ErrorAction SilentlyContinue
-    $svc = Get-Service -Name 'spice-webdavd' -ErrorAction SilentlyContinue
-    if (-not $svc) { throw 'spice-webdavd still absent after install.' }
-    Note '  installed spice-webdavd'
-  }
-  Set-Service -Name 'spice-webdavd' -StartupType Automatic
-  if ((Get-Service spice-webdavd).Status -ne 'Running') { Start-Service spice-webdavd }
-  # WebClient = the WebDAV redirector; without it the Spice client folder won't map.
+# 8) WebDAV redirector - required for the SPICE shared folder to map as a drive.
+#    Ensured UNCONDITIONALLY and BEFORE the spice-webdavd check: WebClient is a stock
+#    Windows service, independent of spice-webdavd, and a missing/failed webdavd must
+#    never leave it unconfigured (it did, in the first real run - the throw skipped it).
+Do-Step 'WebClient: WebDAV redirector Automatic + running' {
   Set-Service -Name 'WebClient' -StartupType Automatic
   if ((Get-Service WebClient).Status -ne 'Running') { Start-Service WebClient }
+}
+
+# 9) SPICE WebDAV daemon - the guest half of host<->guest file transfer via
+#    virt-viewer "Share folder". Attended-only: the share is live only while a
+#    virt-viewer console with a shared folder is connected.
+#
+#    DETECT AND INSTRUCT - deliberately NOT auto-installed. Verified on a real guest:
+#    neither the spice-space.org MSI nor the virtio-win guest tools (nor the installed
+#    qemu-ga.exe) carry an embedded Authenticode signature - only the virtio-win
+#    *drivers* are catalog-signed. So "download, verify the signature, install" can
+#    never succeed here, and auto-fetching an UNSIGNED binary onto this box is exactly
+#    the trust this build refuses. The operator installs it once, knowingly.
+Do-Step 'spice-webdavd: check (host<->guest file share)' {
+  $svc = Get-Service -Name 'spice-webdavd' -ErrorAction SilentlyContinue
+  if ($svc) {
+    Set-Service -Name 'spice-webdavd' -StartupType Automatic
+    if ((Get-Service spice-webdavd).Status -ne 'Running') { Start-Service spice-webdavd }
+    Note '  present; Automatic + running'
+  } else {
+    # Not fatal: the rest of the guest config is valid without it. Warn loudly.
+    Note '  NOT INSTALLED - the SPICE shared folder will not work until you install it.'
+    Note '  Install once, by hand (buildspec 5a):'
+    Note '    https://www.spice-space.org/download/windows/spice-webdavd/spice-webdavd-x64-latest.msi'
+    Note '  Upstream ships this MSI UNSIGNED (verified) - install it knowingly, then'
+    Note '  re-run this script to have the service set Automatic and started.'
+  }
 }
 
 Note ''
