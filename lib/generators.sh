@@ -52,12 +52,30 @@ EOF
 }
 
 gen_net_xml() {
+  # Optional split-horizon DNS overrides (see DNS_OVERRIDES in config.env).
+  # Emitted as libvirt <dns><host> entries so the guest's resolver answers them
+  # directly instead of forwarding. libvirt requires <dns> BEFORE <ip>.
+  local dns_block=''
+  if [ -n "${DNS_OVERRIDES:-}" ]; then
+    local pair host addr
+    dns_block=$'  <dns>\n'
+    for pair in ${DNS_OVERRIDES}; do
+      host="${pair%%:*}"
+      addr="${pair##*:}"
+      # A pair with no ':' leaves host == addr == the whole token; skip it.
+      if [ -z "$host" ] || [ -z "$addr" ] || [ "$host" = "$addr" ]; then
+        continue
+      fi
+      dns_block+="    <host ip='${addr}'><hostname>${host}</hostname></host>"$'\n'
+    done
+    dns_block+=$'  </dns>\n'
+  fi
   cat <<EOF
 <network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
   <name>${NET_NAME}</name>
   <forward mode='nat'/>
   <bridge name='${BRIDGE}' stp='on' delay='0'/>
-  <ip address='${GATEWAY}' netmask='${NETMASK}'>
+${dns_block}  <ip address='${GATEWAY}' netmask='${NETMASK}'>
     <dhcp>
       <range start='${DHCP_START}' end='${DHCP_END}'/>
     </dhcp>

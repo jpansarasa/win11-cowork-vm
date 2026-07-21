@@ -83,6 +83,33 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"start='${DHCP_START}' end='${DHCP_END}'"* ]]
 }
 
+@test "gen_net_xml emits no <dns> block when DNS_OVERRIDES is empty" {
+  DNS_OVERRIDES="" run gen_net_xml
+  [[ "$output" != *"<dns>"* ]]
+}
+
+@test "gen_net_xml emits a <dns><host> entry per DNS_OVERRIDES pair" {
+  DNS_OVERRIDES="a.example.com:203.0.113.10 b.example.com:203.0.113.11" run gen_net_xml
+  [[ "$output" == *"<host ip='203.0.113.10'><hostname>a.example.com</hostname></host>"* ]]
+  [[ "$output" == *"<host ip='203.0.113.11'><hostname>b.example.com</hostname></host>"* ]]
+}
+
+# libvirt's schema requires <dns> before <ip>; emitting it after makes net-define fail.
+@test "gen_net_xml places <dns> before <ip> (libvirt schema order)" {
+  DNS_OVERRIDES="a.example.com:203.0.113.10" run gen_net_xml
+  local dns_line ip_line
+  dns_line=$(printf '%s\n' "$output" | grep -n '<dns>' | cut -d: -f1)
+  ip_line=$(printf '%s\n' "$output" | grep -n "<ip address=" | cut -d: -f1)
+  [ -n "$dns_line" ] && [ -n "$ip_line" ]
+  [ "$dns_line" -lt "$ip_line" ]
+}
+
+@test "gen_net_xml skips malformed DNS_OVERRIDES entries" {
+  DNS_OVERRIDES="nocolon a.example.com:203.0.113.10" run gen_net_xml
+  [[ "$output" == *"<host ip='203.0.113.10'><hostname>a.example.com</hostname></host>"* ]]
+  [[ "$output" != *"nocolon"* ]]
+}
+
 @test "gen_sni_unit captures timestamped SNI and restarts always" {
   run gen_sni_unit
   [[ "$output" == *"-i ${BRIDGE}"* ]]
