@@ -83,33 +83,6 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   [[ "$output" == *"start='${DHCP_START}' end='${DHCP_END}'"* ]]
 }
 
-@test "gen_net_xml emits no <dns> block when DNS_OVERRIDES is empty" {
-  DNS_OVERRIDES="" run gen_net_xml
-  [[ "$output" != *"<dns>"* ]]
-}
-
-@test "gen_net_xml emits a <dns><host> entry per DNS_OVERRIDES pair" {
-  DNS_OVERRIDES="a.example.com:203.0.113.10 b.example.com:203.0.113.11" run gen_net_xml
-  [[ "$output" == *"<host ip='203.0.113.10'><hostname>a.example.com</hostname></host>"* ]]
-  [[ "$output" == *"<host ip='203.0.113.11'><hostname>b.example.com</hostname></host>"* ]]
-}
-
-# libvirt's schema requires <dns> before <ip>; emitting it after makes net-define fail.
-@test "gen_net_xml places <dns> before <ip> (libvirt schema order)" {
-  DNS_OVERRIDES="a.example.com:203.0.113.10" run gen_net_xml
-  local dns_line ip_line
-  dns_line=$(printf '%s\n' "$output" | grep -n '<dns>' | cut -d: -f1)
-  ip_line=$(printf '%s\n' "$output" | grep -n "<ip address=" | cut -d: -f1)
-  [ -n "$dns_line" ] && [ -n "$ip_line" ]
-  [ "$dns_line" -lt "$ip_line" ]
-}
-
-@test "gen_net_xml skips malformed DNS_OVERRIDES entries" {
-  DNS_OVERRIDES="nocolon a.example.com:203.0.113.10" run gen_net_xml
-  [[ "$output" == *"<host ip='203.0.113.10'><hostname>a.example.com</hostname></host>"* ]]
-  [[ "$output" != *"nocolon"* ]]
-}
-
 @test "gen_sni_unit captures timestamped SNI and restarts always" {
   run gen_sni_unit
   [[ "$output" == *"-i ${BRIDGE}"* ]]
@@ -214,4 +187,35 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   printf '%s\n' "${a[@]}" | grep -qx -- "${RAM_MB}"
   # No element may contain a space (each would otherwise be rejected by virt-install).
   for x in "${a[@]}"; do [[ "$x" != *" "* ]]; done
+}
+
+@test "gen_relay_env carries VM, URL, token-file path and outbox" {
+  NTFY_URL="https://ntfy.example.com/t" NTFY_TOKEN_FILE="/etc/cowork/ntfy.token" \
+    NOTIFY_OUTBOX='C:\ProgramData\cowork\outbox' run gen_relay_env
+  [[ "$output" == *"VM_NAME=${VM_NAME}"* ]]
+  [[ "$output" == *"NTFY_URL=https://ntfy.example.com/t"* ]]
+  [[ "$output" == *"NTFY_TOKEN_FILE=/etc/cowork/ntfy.token"* ]]
+  [[ "$output" == *'OUTBOX=C:\ProgramData\cowork\outbox'* ]]
+}
+
+# The env file is 0640 and readable by more than root; the SECRET must live in a
+# separate 0600 file, never inline here.
+@test "gen_relay_env references a token file and never embeds a token" {
+  NTFY_URL="https://ntfy.example.com/t" NTFY_TOKEN_FILE="/etc/cowork/ntfy.token" \
+    NOTIFY_OUTBOX='C:\out' run gen_relay_env
+  [[ "$output" == *"NTFY_TOKEN_FILE="* ]]
+  [[ "$output" != *"tk_"* ]]
+}
+
+@test "gen_relay_service is a oneshot running the installed relay" {
+  run gen_relay_service
+  [[ "$output" == *"Type=oneshot"* ]]
+  [[ "$output" == *"ExecStart=/usr/local/sbin/cowork-notify-relay"* ]]
+}
+
+@test "gen_relay_timer polls on the configured interval and is Persistent" {
+  NOTIFY_POLL_INTERVAL="90s" run gen_relay_timer
+  [[ "$output" == *"OnUnitActiveSec=90s"* ]]
+  [[ "$output" == *"Persistent=true"* ]]
+  [[ "$output" == *"WantedBy=timers.target"* ]]
 }

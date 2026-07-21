@@ -33,7 +33,7 @@ recover_import() {
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   require_root
-  for stage in 00-preflight 10-network 20-firewall 30-observe 35-timesync; do
+  for stage in 00-preflight 10-network 20-firewall 30-observe 35-timesync 37-notify-relay; do
     log "=== ${stage} ==="; bash "${HERE}/scripts/${stage}.sh"
   done
   recover_check_disk

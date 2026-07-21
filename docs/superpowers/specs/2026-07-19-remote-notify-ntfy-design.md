@@ -4,6 +4,52 @@
 **Status:** Approved (brainstorming)
 **Companion doc:** `win11-cowork-vm-buildspec.md` (adds a "Reaching the operator remotely" subsection)
 
+---
+
+## REVISED 2026-07-20 — direct post replaced by a host-mediated relay
+
+Everything below this line describes the **original** design, in which the guest
+POSTed to ntfy itself. That design was implemented, taken to a live guest, and
+**failed**: the self-hosted ntfy resolves to a LAN address (a reverse proxy on the
+router), and the cage correctly drops guest→LAN as lateral movement. The premise
+"the guest already has 443 egress, so it can post directly" is true in general and
+false for a self-hosted endpoint.
+
+The workarounds were worse than the problem — punching a hole to the router, or
+pinning a public address and maintaining it against a dynamic IP. The shipped
+design instead **spools in the guest and publishes from the host**:
+
+```
+guest: notify.ps1 -> %ProgramData%\cowork\outbox\*.json
+                          | (qemu-guest-agent; host pulls)
+host:  cowork-notify-relay -> https://<ntfy-host>/<topic> -> phone
+```
+
+What changed, and why it is better than what this spec originally proposed:
+
+- **The guest holds no credential.** The token is root-only on the host. This
+  *removes* the "one sanctioned secret in the guest" exception that section 3
+  below had to argue for — the exception is simply gone.
+- **The one-way property is structural.** The guest has no token, no URL, and no
+  network path to ntfy. It cannot subscribe even if its code were altered; the
+  original design relied on us not writing a subscribe path.
+- **Nothing to maintain.** No DNS override, no pinned address, no router or
+  firewall change.
+- **Delivery is durable.** A failed publish leaves the request queued and retries;
+  a malformed one is quarantined rather than retried forever.
+
+Costs accepted: notifications arrive on a poll interval (default 1 min) rather
+than instantly, and attachments are capped at 2 MB because they ride inline
+through the agent channel. Large files use the SPICE share (Problem 1).
+
+Retained from the original design and verified live: RFC 2047 encoding for
+non-ASCII headers (ntfy decodes it — confirmed in ntfy's own message store),
+`-DryRun`, fail-loud behaviour, and the publish-only single-topic token, whose
+scoping was proven by test (publish 200 / read 403 / other-topic 403) and whose
+revocation was proven to fail loud (HTTP 401) and then rotate cleanly.
+
+---
+
 ## Purpose
 
 Let **Cowork / the guest reach the operator when they're away** (phone), to **notify** — and optionally **hand over a file** (a draft it produced) as an attachment on the same channel. This is **Problem 2** in the decomposition: outbound, remote, guest-originated. It is entirely separate from local file transfer (Problem 1, SPICE — its own spec). The optional attachment is a bonus on the notification channel, **not** a second mechanism.
