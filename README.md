@@ -62,7 +62,7 @@ Idempotent bash collateral automates the **Linux host** side of the buildspec
 `config.env`.
 
 ```bash
-sudo ./install.sh     # fresh build: preflight → network → firewall → observe → timesync → create VM → verify
+sudo ./install.sh     # fresh build: preflight → network → firewall → observe → timesync → wan-dns → create VM → verify
 # ... manual Windows + Cowork + connector steps (guest/postboot.ps1 does the mechanical config) ...
 sudo ./scripts/90-snapshot.sh   # VSS-quiesce the guest, then `zfs snapshot` the golden (disk + exported XML)
 

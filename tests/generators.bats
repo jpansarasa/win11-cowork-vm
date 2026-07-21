@@ -215,3 +215,44 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   # No element may contain a space (each would otherwise be rejected by virt-install).
   for x in "${a[@]}"; do [[ "$x" != *" "* ]]; done
 }
+
+@test "gen_wandns_script bakes in the network, tracked hosts, and lookup URLs" {
+  DNS_WAN_HOSTS="a.example.com b.example.com" WAN_IP_LOOKUPS="https://one https://two" run gen_wandns_script
+  [[ "$output" == *"NET='${NET_NAME}'"* ]]
+  [[ "$output" == *"HOSTS='a.example.com b.example.com'"* ]]
+  [[ "$output" == *"LOOKUPS='https://one https://two'"* ]]
+}
+
+# A lookup service returning HTML/an error must never be written into DNS.
+@test "gen_wandns_script validates the looked-up value is a bare IPv4" {
+  DNS_WAN_HOSTS="a.example.com" run gen_wandns_script
+  [[ "$output" == *'*[!0-9.]*) continue'* ]]
+  [[ "$output" == *'*.*.*.*)'* ]]
+}
+
+@test "gen_wandns_script exits immediately when no hosts are tracked" {
+  DNS_WAN_HOSTS="" run gen_wandns_script
+  [[ "$output" == *'[ -n "$HOSTS" ] || exit 0'* ]]
+}
+
+# Updating live+config matters: --config alone would not affect the running
+# network, --live alone would be lost on the next libvirtd restart.
+@test "gen_wandns_script updates libvirt both --live and --config" {
+  DNS_WAN_HOSTS="a.example.com" run gen_wandns_script
+  [[ "$output" == *"add dns-host"* ]]
+  [[ "$output" == *"delete dns-host"* ]]
+  [[ "$(grep -c -- '--live --config' <<<"$output")" -ge 2 ]]
+}
+
+@test "gen_wandns_service runs the generated helper as a oneshot" {
+  run gen_wandns_service
+  [[ "$output" == *"Type=oneshot"* ]]
+  [[ "$output" == *"ExecStart=/usr/local/sbin/cowork-wandns"* ]]
+}
+
+@test "gen_wandns_timer repeats and is Persistent across downtime" {
+  run gen_wandns_timer
+  [[ "$output" == *"OnUnitActiveSec="* ]]
+  [[ "$output" == *"Persistent=true"* ]]
+  [[ "$output" == *"WantedBy=timers.target"* ]]
+}

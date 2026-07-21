@@ -409,9 +409,16 @@ has no read/poll path; keep it that way.
 > simply time out. **Do not** instead allow guest→LAN for the ntfy host: on a typical
 > setup that address is the router itself, the highest-value target on the network.
 >
-> **Maintenance:** this pins a WAN IP. If it is dynamic (DDNS), the override goes
-> stale on renumber and notifications stop **silently** — the guest resolves a dead
-> address. Re-check `DNS_OVERRIDES` after an IP change, or automate the refresh.
+> **Dynamic WAN address:** a pinned IP goes stale on renumber, and notifications
+> then stop **silently** — the guest just resolves a dead address, with no error
+> anywhere until you notice the pings stopped. Set `DNS_WAN_HOSTS` in
+> `config.local.env` and stage `36-wandns` installs a host-side timer
+> (`cowork-wandns`, every 15 min) that re-points those entries at the current
+> public IP, updating libvirt `--live --config`. Leave `DNS_WAN_HOSTS` empty and
+> the timer is not installed at all.
+>
+> Site-specific values (your hostname, your WAN IP) belong in **`config.local.env`**
+> — gitignored — not in the tracked `config.env`. See `config.local.env.example`.
 
 1. In ntfy, pick a **hard-to-guess topic** (e.g. `cowork-7f3a…`) and create a
    **publish-only access token** scoped to just that topic (ntfy: *Account →
