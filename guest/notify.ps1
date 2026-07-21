@@ -28,8 +28,24 @@ param(
 $ErrorActionPreference = 'Stop'
 $ConfigPath = Join-Path $env:ProgramData 'cowork\ntfy.json'
 
-# HTTP header values cannot contain CR/LF - flatten anything that becomes a header.
+# Header values are constrained twice over, and BOTH failures throw (losing the
+# notification), so every value that becomes a header goes through HdrSafe:
+#   1. CR/LF is illegal in a header value.
+#   2. .NET's WebHeaderCollection rejects any char outside Latin-1 with
+#      "Specified value has invalid Control characters" - so a title like
+#      "café - naive" with an em-dash (U+2014) throws rather than mojibakes.
+# ntfy's documented answer for non-ASCII headers is RFC 2047, which it decodes.
 function Flatten([string]$s) { ($s -replace "`r`n|`r|`n", ' ').Trim() }
+function HdrSafe([string]$s) {
+  $s = Flatten $s
+  if ($s -match '[^\x20-\x7E]') {
+    return '=?UTF-8?B?' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) + '?='
+  }
+  return $s
+}
+# Tags are ASCII shortcodes (ntfy matches them by name), so RFC 2047 would break
+# matching - strip anything non-printable-ASCII instead of encoding it.
+function TagSafe([string]$s) { (Flatten $s) -replace '[^\x20-\x7E]', '' }
 
 function Get-NtfyConfig([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -46,17 +62,17 @@ $cfg = Get-NtfyConfig $ConfigPath
 
 $headers = @{
   'Authorization' = "Bearer $($cfg.token)"
-  'Title'         = (Flatten $Title)
+  'Title'         = (HdrSafe $Title)
   'Priority'      = $Priority
 }
-if ($Tags) { $headers['Tags'] = (Flatten ($Tags -join ',')) }
+if ($Tags) { $headers['Tags'] = (TagSafe ($Tags -join ',')) }
 
 $usePut = [bool]$File
 if ($usePut) {
   if (-not (Test-Path -LiteralPath $File)) { throw "Attachment not found: $File" }
   $headers['Filename'] = [System.IO.Path]::GetFileName($File)
   # With an attachment the body IS the file, so the text rides in the Message header.
-  $headers['Message']  = (Flatten $Message)
+  $headers['Message']  = (HdrSafe $Message)
 }
 
 if ($DryRun) {

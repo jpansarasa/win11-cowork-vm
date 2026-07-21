@@ -391,6 +391,28 @@ subscribe path would be a command channel *into* the guest. `guest/notify.ps1`
 has no read/poll path; keep it that way.
 
 **One-time setup:**
+> **Gotcha — a self-hosted endpoint the guest cannot reach (split-horizon DNS).**
+> If the ntfy host is self-hosted behind the same router, its name very likely
+> resolves *internally* to a LAN address (the router/reverse proxy). The guest sits
+> inside that LAN, gets the LAN answer, and the cage correctly drops it as lateral
+> movement — `notify.ps1` then fails with `Unable to connect to the remote server`.
+> Verify first:
+>
+> ```powershell
+> Resolve-DnsName <ntfy-host> -Type A     # RFC1918 answer => the guest cannot reach it
+> ```
+>
+> Fix without weakening the cage: point the guest at the **public** address via
+> `DNS_OVERRIDES` in `config.env` (emitted as a libvirt `<dns><host>` entry by
+> `gen_net_xml`, so it survives `recover.sh`). This requires **NAT reflection /
+> hairpin** enabled on the gateway, or the guest's traffic to the WAN address will
+> simply time out. **Do not** instead allow guest→LAN for the ntfy host: on a typical
+> setup that address is the router itself, the highest-value target on the network.
+>
+> **Maintenance:** this pins a WAN IP. If it is dynamic (DDNS), the override goes
+> stale on renumber and notifications stop **silently** — the guest resolves a dead
+> address. Re-check `DNS_OVERRIDES` after an IP change, or automate the refresh.
+
 1. In ntfy, pick a **hard-to-guess topic** (e.g. `cowork-7f3a…`) and create a
    **publish-only access token** scoped to just that topic (ntfy: *Account →
    Access tokens*, then a topic ACL granting write-only). This token is the one
@@ -400,12 +422,21 @@ has no read/poll path; keep it that way.
    `guest/ntfy.json.example`) with the topic URL + token. Lock it down:
    ```powershell
    New-Item -ItemType Directory -Force -Path "$env:ProgramData\cowork" | Out-Null
-   # paste url+token into $env:ProgramData\cowork\ntfy.json, then restrict to admins+SYSTEM:
-   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r /grant:r "$env:USERNAME:R" "BUILTIN\Administrators:R" "SYSTEM:R"
+   # paste url+token into $env:ProgramData\cowork\ntfy.json, then:
+   $agent = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon').DefaultUserName
+   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r `
+     /grant:r "${agent}:(R)" "BUILTIN\Administrators:(F)" "SYSTEM:(F)"
    ```
-   The grant **must name the account Cowork actually runs as** (the autologon user) —
-   Cowork invokes the helper non-elevated, so an Administrators-only ACL will silently
-   deny it.
+   Two things this gets right, both learned the hard way:
+   - The grant **must name the account Cowork actually runs as** (the autologon user).
+     Cowork invokes the helper **non-elevated**, so its filtered token has the
+     Administrators group deny-only — an Administrators-only ACL silently denies it.
+   - The agent account gets **`R`**, but Administrators/SYSTEM get **`F`**. Granting
+     `R` to *everyone* (as an earlier version of this doc did) makes the file
+     unwritable by anyone, so **token rotation fails** with `Access to the path ... is
+     denied` — you then have to fix the DACL before you can replace a revoked token.
+     Read-only for the agent is the security intent; full control for admins is what
+     makes the credential rotatable.
 3. Copy `guest/notify.ps1` into `C:\cowork\` in the guest (the §5a SPICE share is the
    easy way to get it there). Subscribe to the topic on your phone (ntfy app) and send
    a test:
