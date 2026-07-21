@@ -288,12 +288,28 @@ Move files between a local machine and the guest over the **same** SPICE-over-SS
 console tunnel — no firewall change, no extra ports. The share is live **only while
 `virt-viewer` is connected**, so it never widens the unattended attack surface.
 
-**Guest side:** handled by `guest/postboot.ps1` — it ensures `spice-webdavd` and the
-`WebClient` redirector are installed and running. Confirm once:
+**Guest side — two parts.** `guest/postboot.ps1` ensures the stock **`WebClient`**
+(WebDAV redirector) is Automatic + running, and *checks* for **`spice-webdavd`**. It
+does **not** install `spice-webdavd`: verified on a real guest, neither the
+spice-space.org MSI nor the virtio-win guest tools carry an embedded Authenticode
+signature (only the virtio-win *drivers* are catalog-signed), so "download and verify"
+is impossible — and auto-fetching an unsigned binary onto this box is a trust this
+build declines. Install it once, by hand:
+
+```
+https://www.spice-space.org/download/windows/spice-webdavd/spice-webdavd-x64-latest.msi
+```
+
+**Upstream ships this MSI unsigned** — install it knowingly, then re-run
+`postboot.ps1` to have the service set Automatic and started. Confirm:
 
 ```powershell
 Get-Service spice-webdavd, WebClient   # both Running
 ```
+
+If `spice-webdavd` is absent, `postboot.ps1` prints the URL and this caveat rather
+than failing — the rest of the guest config is valid without it; only the shared
+folder is unavailable.
 
 **Client side (the machine running `virt-viewer`):** pick a folder to share.
 
@@ -326,7 +342,7 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 
 **Checklist (in order):**
 1. **Guest tools** — install `virtio-win-guest-tools.exe` from the virtio-win CD (qemu-ga + SPICE + NIC/balloon). **qemu-ga is load-bearing**: host snapshots (`domfsfreeze`) and time-sync (`domtime`) go through it.
-2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), a curated **debloat**, and ensures `spice-webdavd` + `WebClient` (downloading the signed MSI from spice-space.org if absent).
+2. **Mechanical config** — `powershell -ExecutionPolicy Bypass -File .\postboot.ps1` (elevated). It does: no sleep/hibernate/monitor-off, no inactivity auto-lock, no auto-reboot while logged on, disable Windows Time, set timezone, enable the HCS features (Hyper-V / Containers / VirtualMachinePlatform), a curated **debloat**, ensures the `WebClient` WebDAV redirector, and *checks* for `spice-webdavd` (printing install instructions if absent — it never downloads an installer). No outbound fetch.
 3. **Confirm firmware:** `Get-Tpm` (TpmReady = True), `Confirm-SecureBootUEFI` (True). After the later reboot, `Get-Service vmcompute, hns` should both be Running (vfpext loads on demand).
 4. **Autologon** — **Sysinternals Autologon** (stores the credential via LSA, not plaintext registry; sidesteps the hidden `netplwiz` checkbox on Win11 local accounts). Makes reboots self-healing. *[manual — credential]*
 5. **Claude** — install from **https://claude.com/download**, sign in, enable Cowork, then Advanced options → *Runs at log-in* = **On** and *Let this app run in background* = **Always** (see the launch-at-logon note below). *[manual — auth]*

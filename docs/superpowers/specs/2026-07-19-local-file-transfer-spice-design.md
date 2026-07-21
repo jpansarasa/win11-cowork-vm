@@ -49,9 +49,11 @@ Client workstation
 ## Components
 
 1. **Guest — `spice-webdavd` present + running.** Part of the Windows SPICE guest tools. `spice-vdagent` is almost certainly already installed (clipboard works), and `spice-webdavd` often ships alongside it. **Step 0 is *verify*, install only if missing.** This is mechanical guest config, so it fits `guest/postboot.ps1`'s charter: add an idempotent check-then-ensure block that
-   - checks whether the `spice-webdavd` service exists; if absent, **auto-downloads the signed `spice-webdavd` MSI from spice-space.org**, verifies its Authenticode signature is `Valid` before installing, and refuses to install otherwise — a deliberate operator decision to let postboot self-heal this dependency rather than only logging an instruction,
-   - if present, ensures the service is enabled + running (`Set-Service -StartupType Automatic`, `Start-Service`),
-   - and ensures the **`WebClient`** service is running + auto-start (Windows needs it to map the WebDAV drive).
+   - ensures the **`WebClient`** service is Automatic + running **first and unconditionally** — it is a stock Windows service, independent of `spice-webdavd`, and must never be left unconfigured because the webdavd step failed,
+   - then checks whether the `spice-webdavd` service exists; if present, ensures it is enabled + running (`Set-Service -StartupType Automatic`, `Start-Service`),
+   - if absent, **logs the install URL and stops — it does not download or install anything** (non-fatal; the rest of the guest config is valid without it).
+
+   **Why detect-and-instruct, not auto-install** (revised after the first real run): auto-install with an Authenticode gate was tried and *cannot work*. Verified on a live guest — the spice-space.org MSI, both virtio-win guest-tools installers, and the already-installed `qemu-ga.exe` all report `NotSigned`; only the virtio-win *drivers* are catalog-signed. `Get-AuthenticodeSignature` itself was proven functional (`Valid` for `notepad.exe`/`kernel32.dll`/`explorer.exe`), so the gate was correct and the assumption about upstream artifacts was wrong. The remaining options were to auto-fetch an unsigned binary behind a pinned hash — a hash proves "the same bytes as last time", not "trustworthy" — or to have the operator install it once, knowingly. For a rarely-run setup step on a deliberately hardened guest, the latter is right.
    The block is idempotent and safe to re-run, matching every other `postboot.ps1` action.
 
 2. **Client (WSLg) — virt-viewer with a shared folder.** Set once in `virt-viewer` → Preferences → **Share folder** (persisted). The WSLg wrinkle, documented precisely: the folder is a **WSL-side path**, so to share Windows files point it at `/mnt/c/Users/<user>/Downloads` (or copy into WSL first). Note the mild `/mnt/c` performance caveat for large files.
