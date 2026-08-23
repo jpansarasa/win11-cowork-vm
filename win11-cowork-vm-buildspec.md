@@ -332,7 +332,7 @@ slow for very large files — for those, copy into the WSL home first.)
 - The drive vanishing when you close `virt-viewer` is **expected** — the share is attended-only.
 
 > Remote hand-off (when you're away from the console) is a different channel — see
-> §8a "Reaching the operator remotely" (ntfy). SPICE is the local, attended path only.
+> §8a "Reaching the operator remotely" (ntfy, host-mediated). SPICE is the local, attended path only.
 
 ---
 
@@ -378,85 +378,91 @@ This is the whole guest-side config, in order. The **mechanical, non-interactive
 - Scope connectors minimally (draft/label over full-send where the option exists; read-only Drive if write isn't required). Drive is optional given the ZFS store — skip it if not needed.
 - MFA on every account. Note that these sessions are the only asset on the box and are revocable in seconds from outside if anything looks off.
 
-### 8a. Reaching the operator remotely (ntfy — outbound only)
+### 8a. Reaching the operator remotely (ntfy, host-mediated)
 
-When Cowork needs the operator while they're away, it sends a **one-way** ntfy
-notification (optionally with a file attachment) straight from the guest over its
-existing 443 egress. This is the natural complement to the capability gate:
-unattended runs can't *act* irreversibly, but they *can* say "I'm blocked" or
-"here's a draft."
+When Cowork needs the operator while they are away, it queues a notification and
+the **host** publishes it to ntfy. The optional file attachment rides the same
+request. This is the natural complement to the capability gate: unattended runs
+cannot *act* irreversibly, but they *can* say "I'm blocked" or "here's a draft."
 
-**Hard rule — outbound only.** The guest publishes; it **never subscribes**. A
-subscribe path would be a command channel *into* the guest. `guest/notify.ps1`
-has no read/poll path; keep it that way.
+**Why host-mediated, not a direct post from the guest.** The obvious design is for
+the guest to POST to ntfy itself, since it already has 443 egress. That was tried
+and does not work: a self-hosted ntfy resolves to a LAN address (commonly a
+reverse proxy on the router), and the cage correctly drops guest→LAN as lateral
+movement. Working around that means either punching a hole to the router — the
+highest-value target on the network — or pinning a public address that goes stale
+when it changes. Both are worse than simply publishing from the host, which can
+reach ntfy and always could.
 
-**One-time setup:**
-> **Gotcha — a self-hosted endpoint the guest cannot reach (split-horizon DNS).**
-> If the ntfy host is self-hosted behind the same router, its name very likely
-> resolves *internally* to a LAN address (the router/reverse proxy). The guest sits
-> inside that LAN, gets the LAN answer, and the cage correctly drops it as lateral
-> movement — `notify.ps1` then fails with `Unable to connect to the remote server`.
-> Verify first:
->
-> ```powershell
-> Resolve-DnsName <ntfy-host> -Type A     # RFC1918 answer => the guest cannot reach it
-> ```
->
-> Fix without weakening the cage: point the guest at the **public** address via
-> `DNS_OVERRIDES` in `config.env` (emitted as a libvirt `<dns><host>` entry by
-> `gen_net_xml`, so it survives `recover.sh`). This requires **NAT reflection /
-> hairpin** enabled on the gateway, or the guest's traffic to the WAN address will
-> simply time out. **Do not** instead allow guest→LAN for the ntfy host: on a typical
-> setup that address is the router itself, the highest-value target on the network.
->
-> **Maintenance:** this pins a WAN IP. If it is dynamic (DDNS), the override goes
-> stale on renumber and notifications stop **silently** — the guest resolves a dead
-> address. Re-check `DNS_OVERRIDES` after an IP change, or automate the refresh.
+The relay gives three things the direct design could not:
 
-1. In ntfy, pick a **hard-to-guess topic** (e.g. `cowork-7f3a…`) and create a
-   **publish-only access token** scoped to just that topic (ntfy: *Account →
-   Access tokens*, then a topic ACL granting write-only). This token is the one
-   sanctioned secret in the guest (buildspec principle #1 exception): publish-only,
-   single-topic, revocable in seconds.
-2. In the guest, write `%ProgramData%\cowork\ntfy.json` (see
-   `guest/ntfy.json.example`) with the topic URL + token. Lock it down:
-   ```powershell
-   New-Item -ItemType Directory -Force -Path "$env:ProgramData\cowork" | Out-Null
-   # paste url+token into $env:ProgramData\cowork\ntfy.json, then:
-   $agent = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon').DefaultUserName
-   icacls "$env:ProgramData\cowork\ntfy.json" /inheritance:r `
-     /grant:r "${agent}:(R)" "BUILTIN\Administrators:(F)" "SYSTEM:(F)"
+- **The guest holds no credential.** The token lives on the host at
+  `/etc/cowork/ntfy.token`, root-only. This removes the "one sanctioned secret in
+  the guest" exception to design principle #1 entirely.
+- **Nothing to keep current.** No DNS override, no pinned address, no firewall,
+  router, or DNS change anywhere.
+- **The one-way property is structural, not just documented.** The guest writes
+  files into a spool directory. It has no token, no URL, and no network path to
+  ntfy, so it *cannot* read or subscribe even if its code were altered.
+
+```
+guest: notify.ps1 --> %ProgramData%\cowork\outbox\*.json
+                              |
+                    (qemu-guest-agent; host pulls)
+                              v
+host: cowork-notify-relay --> https://<ntfy-host>/<topic>  --> phone
+```
+
+**Setup:**
+
+1. In ntfy, create a dedicated user with **write-only** access to one topic, and
+   mint it an access token. Verify the scoping rather than assuming it — publish
+   should succeed, and a read should be refused:
+   ```bash
+   curl -H "Authorization: Bearer $TOKEN" -d hi https://<ntfy-host>/<topic>   # 200
+   curl -H "Authorization: Bearer $TOKEN" https://<ntfy-host>/<topic>/json?poll=1  # 403
    ```
-   Two things this gets right, both learned the hard way:
-   - The grant **must name the account Cowork actually runs as** (the autologon user).
-     Cowork invokes the helper **non-elevated**, so its filtered token has the
-     Administrators group deny-only — an Administrators-only ACL silently denies it.
-   - The agent account gets **`R`**, but Administrators/SYSTEM get **`F`**. Granting
-     `R` to *everyone* (as an earlier version of this doc did) makes the file
-     unwritable by anyone, so **token rotation fails** with `Access to the path ... is
-     denied` — you then have to fix the DACL before you can replace a revoked token.
-     Read-only for the agent is the security intent; full control for admins is what
-     makes the credential rotatable.
-3. Copy `guest/notify.ps1` into `C:\cowork\` in the guest (the §5a SPICE share is the
-   easy way to get it there). Subscribe to the topic on your phone (ntfy app) and send
-   a test:
+2. On the **host**, store the token root-only and set the topic URL:
+   ```bash
+   sudo install -d -m 0750 /etc/cowork
+   printf '%s' 'tk_...' | sudo tee /etc/cowork/ntfy.token >/dev/null
+   sudo chmod 600 /etc/cowork/ntfy.token
+   # NTFY_URL="https://<ntfy-host>/<topic>"  -> config.local.env (gitignored)
+   sudo ./scripts/37-notify-relay.sh
+   ```
+   An empty `NTFY_URL` installs nothing, so the relay is opt-in.
+3. Copy `guest/notify.ps1` into `C:\cowork\` in the guest (the §5a SPICE share is
+   the easy way). It needs no configuration — there is nothing to configure.
+4. Subscribe to the topic on your phone and queue a test:
    ```powershell
    C:\cowork\notify.ps1 -Title 'test' -Message 'hello from the guest'
    ```
+   It appears within one poll interval (`NOTIFY_POLL_INTERVAL`, default 1 min).
 
 **Wiring Cowork to it (documented command).** Cowork invokes the helper through its
-normal command execution — no MCP, no extension API. Give Cowork a standing
-instruction, e.g.:
+normal command execution — no MCP, no extension API:
 
 > To notify the operator, run:
 > `powershell -ExecutionPolicy Bypass -File C:\cowork\notify.ps1 -Title "<short>" -Message "<detail>" [-Priority high] [-File "<path>"]`
 > Use it when blocked awaiting approval, or to hand over a finished draft (`-File`).
-> Never attempt to read or subscribe to ntfy — this channel is outbound only.
 
-**Residual risk (documented, not hidden):** a prompt-injected Cowork could use the
-notification body/attachment as an exfil channel — but the guest already has full
-443 egress, so this adds convenience, not a new capability. Bounded by: publish-only
-scope, a hard-to-guess topic, and instant token revocation.
+**Behaviour worth knowing:**
+
+- **Attachments are capped at 2 MB** and rejected in the guest before queueing —
+  they ride inline through the agent channel, which is not a bulk transport. Use
+  the §5a SPICE share for real file movement.
+- **A failed publish leaves the request queued** and the next run retries it, so a
+  transient ntfy outage delays notifications rather than losing them. A *malformed*
+  request is renamed `.bad` instead of being retried forever.
+- **Non-ASCII is handled.** Titles containing characters outside Latin-1 would
+  otherwise throw when set as an HTTP header; the relay RFC 2047-encodes them,
+  which ntfy decodes. Tags are stripped instead, since ntfy matches them by name.
+
+**Residual risk (documented, not hidden):** a prompt-injected Cowork could queue
+misleading notifications, or use an attachment as a small exfil channel to the
+operator's own topic. It cannot reach any other topic, cannot read the topic, and
+cannot obtain the token. The blast radius is "someone spams your phone", cleared
+by revoking one token.
 
 > This is the *remote* channel. Local, attended file moves use the SPICE shared
 > folder — see §5a.
