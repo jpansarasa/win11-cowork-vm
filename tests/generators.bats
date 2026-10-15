@@ -198,9 +198,11 @@ setup() { load "test_helper"; source "${REPO_ROOT}/lib/generators.sh"; }
   OVMF_DIR="$BATS_TMPDIR/ovmf" run virt_install_args
   # --import is emitted as its own token (own line)
   printf '%s\n' "$output" | grep -qx -- '--import'
-  # the Win11 installer CD boots first, the OS disk is in the boot chain
-  [[ "$output" == *"path=${WIN_ISO},device=cdrom,boot.order=1"* ]]
-  [[ "$output" == *"format=qcow2,bus=virtio,boot.order=3"* ]]
+  # the OS disk boots first; the CDs are fallbacks (a blank disk falls through
+  # to the installer on a fresh build, a built disk never touches the CDs)
+  [[ "$output" == *"format=qcow2,bus=virtio,boot.order=1"* ]]
+  [[ "$output" == *"path=${WIN_ISO},device=cdrom,boot.order=2"* ]]
+  [[ "$output" == *"path=${VIRTIO_ISO},device=cdrom,boot.order=3"* ]]
 }
 
 @test "virt_install_args emits one token per line (flag and value never share an element)" {

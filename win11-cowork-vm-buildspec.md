@@ -227,9 +227,9 @@ virt-install \
   --boot uefi \
   --features smm.state=on \
   --tpm backend.type=emulator,backend.version=2.0,model=tpm-crb \
-  --disk path=/export/coworkvm/win11-cowork.qcow2,size=100,format=qcow2,bus=virtio \
-  --disk path=/var/lib/libvirt/images/Win11.iso,device=cdrom,boot.order=1 \
-  --disk path=/var/lib/libvirt/images/virtio-win.iso,device=cdrom \
+  --disk path=/export/coworkvm/win11-cowork.qcow2,size=100,format=qcow2,bus=virtio,boot.order=1 \
+  --disk path=/var/lib/libvirt/images/Win11.iso,device=cdrom,boot.order=2 \
+  --disk path=/var/lib/libvirt/images/virtio-win.iso,device=cdrom,boot.order=3 \
   --network network=cowork-net,model=virtio \
   --channel unix,target.type=virtio,target.name=org.qemu.guest_agent.0 \
   --graphics spice \
@@ -241,6 +241,7 @@ virt-install \
 
 Notes:
 - Older `virt-install` uses `--os-variant win11` instead of `--osinfo win11`.
+- **Disk boots first.** The blank disk falls through to the installer CD on a fresh build; after install every reboot goes straight to Windows. With the CD first, every reboot stalls at "Press any key to boot from CD" plus OVMF `failed to load … DVD-ROM` messages. Once installed, eject both ISOs (`virsh change-media win11-cowork sda --eject --config`, same for `sdb`).
 - If `--boot uefi` doesn't enable Secure Boot on this distro, set it explicitly with the `.secboot` firmware, e.g. `--boot loader=/usr/share/OVMF/OVMF_CODE.secboot.fd,loader.readonly=yes,loader.type=pflash,loader.secure=yes,nvram.template=/usr/share/OVMF/OVMF_VARS.fd` plus `--features smm.state=on`.
 - 16 GB / 4 vCPU is generous headroom on 32 GB free; drop to 12 GB if you want more host slack.
 - **Disk lives on a ZFS dataset** (`tank/coworkvm`, mounted `/export/coworkvm`), not the NVMe libvirt pool — so the golden baseline snapshots and the whole recovery story are ZFS (§9). The ISOs can stay in the libvirt pool.
