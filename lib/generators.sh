@@ -174,6 +174,10 @@ virt_install_args() {
   code="${pair%%|*}"; vars="${pair##*|}"
   # One token per line: virt-install receives each element as a separate argv
   # slot, so a flag and its value must NOT share a line (values contain no spaces).
+  # Boot order: OS disk FIRST. On a fresh build the blank disk is unbootable, so
+  # OVMF falls through to the installer CD; once Windows is installed, every
+  # reboot goes straight to the disk. CD-first made every reboot stall at the
+  # installer's "Press any key to boot from CD" prompt (one stray key = Setup).
   cat <<EOF
 --name
 ${VM_NAME}
@@ -194,11 +198,11 @@ loader=${code},loader.readonly=yes,loader.type=pflash,loader.secure=yes,nvram.te
 --tpm
 backend.type=emulator,backend.version=2.0,model=tpm-crb
 --disk
-path=${DISK_PATH},size=${DISK_GB},format=qcow2,bus=virtio,boot.order=3
+path=${DISK_PATH},size=${DISK_GB},format=qcow2,bus=virtio,boot.order=1
 --disk
-path=${WIN_ISO},device=cdrom,boot.order=1
+path=${WIN_ISO},device=cdrom,boot.order=2
 --disk
-path=${VIRTIO_ISO},device=cdrom,boot.order=2
+path=${VIRTIO_ISO},device=cdrom,boot.order=3
 --network
 network=${NET_NAME},model=virtio
 --channel
